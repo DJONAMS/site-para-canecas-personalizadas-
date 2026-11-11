@@ -1,5 +1,6 @@
-# Configuração da página
 import streamlit as st
+
+# Configuração da página
 st.set_page_config(page_title="Gestão de Pedidos", layout="wide")
 
 # Cabeçalho com Logo e Nome
@@ -13,7 +14,7 @@ with col2:
 st.divider()
 
 # Banner Promocional
-st.error("🎉 PRODUTO DA SEMANA: Canecas Personalizadas com 10% de DESCONTO! Peça já a sua! 🎉")
+st.error("PRODUTO DA SEMANA: Canecas Personalizadas com 10% de DESCONTO! Peça já a sua! 🥳")
 
 st.write("")
 
@@ -31,13 +32,9 @@ st.header("Catálogo de Produtos")
 
 # Exemplo de dados de produtos
 produtos = [
-    {"nome": "Copo Térmico Personalizado", "preco": "R$ 80,00", "cat": "Copos", "imagem": "[https://picsum.photos/200](https://picsum.photos/200)", "destaque": True}
-    {"nome": "Camisa Estampada Algodão", "preco": "R$ 60,00", "cat": "Camisas",
-    "imagem": "https://picsum.photos/201",
- "destaque": False},
-    {"nome": "Mateira em Couro", "preco": "R$ 120,00", "cat": "Mateiras",
-    "imagem": "https://picsum.photos/202",
- "destaque": True},
+    {"nome": "Copo Térmico Personalizado", "preco": "R$ 80,00", "cat": "Copos", "imagem": "https://picsum.photos/200", "destaque": False},
+    {"nome": "Camisa Estampada Algodão", "preco": "R$ 60,00", "cat": "Camisas", "imagem": "https://picsum.photos/201", "destaque": False},
+    {"nome": "Mateira em Couro", "preco": "R$ 120,00", "cat": "Mateiras", "imagem": "https://picsum.photos/202", "destaque": True}
 ]
 
 # Seção de Destaques
@@ -58,8 +55,9 @@ if categoria != "Todos":
 cols = st.columns(3)
 for index, prod in enumerate(produtos):
     with cols[index % 3]:
-        st.image("https://via.placeholder.com/300x200.png?text=Imagem+do+Produto", use_container_width=True)
+        st.image(prod["imagem"], use_container_width=True)
         st.subheader(prod["nome"])
         st.write(f"**Preço:** {prod['preco']}")
         if st.button(f"Adicionar {prod['nome']}", key=f"btn_{index}"):
             st.success(f"{prod['nome']} adicionado ao pedido!")
+
