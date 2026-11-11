@@ -1,63 +1,63 @@
 import streamlit as st
 
 # Configuração da página
-st.set_page_config(page_title="Gestão de Pedidos", layout="wide")
+st.set_page_config(page_title="Catálogo e Pedidos", layout="wide")
 
-# Cabeçalho com Logo e Nome
+# Cabeçalho
 col1, col2 = st.columns([1, 4])
 with col1:
     st.markdown("### [LOGO]")
 with col2:
     st.title("Nome da Empresa")
-    st.subheader("Catálogo e Gestão de Pedidos")
+    st.subheader("Catálogo de Produtos")
 
 st.divider()
 
-# Banner Promocional
-st.error("PRODUTO DA SEMANA: Canecas Personalizadas com 10% de DESCONTO! Peça já a sua! 🥳")
-
-st.write("")
-
-# Barra Lateral para Filtros
+# Barra Lateral - Carrinho, Mascote e Pagamento
 with st.sidebar:
-    st.header("Categorias")
-    categoria = st.radio("Selecione uma categoria:", ["Todos", "Copos", "Camisas", "Mateiras"])
-    st.divider()
-    st.header("Dúvidas?")
-    if st.button("Falar no WhatsApp"):
-        st.link_button("Clique aqui para abrir o chat", "https://wa.me/seu_numero_aqui")
+    # GIF do Hamster
+    st.image("https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNHJueGZueGZueGZueGZueGZueGZueGZueGZueGZueGZueGZueGZueCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3o7TKMGpxxHOGTdzJC/giphy.gif", caption="Seu assistente!", width=150)
+    
+    st.header("🛒 Seu Carrinho")
+    if "carrinho" not in st.session_state:
+        st.session_state.carrinho = []
+        
+    if not st.session_state.carrinho:
+        st.write("O carrinho está vazio.")
+    else:
+        total = 0
+        for item in st.session_state.carrinho:
+            st.write(f"- {item['nome']}: R$ {item['preco']:.2f}")
+            total += item['preco']
+        st.write(f"**Total: R$ {total:.2f}**")
+        
+        st.divider()
+        st.header("💳 Pagamento via Pix")
+        st.info("Chave Pix (CNPJ/CPF/Celular): **SUA-CHAVE-PIX-AQUI**")
+        st.warning("Após realizar o Pix, envie o comprovante abaixo com seu nome.")
+        
+        if st.button("Finalizar Pedido no WhatsApp"):
+            itens_texto = ", ".join([i['nome'] for i in st.session_state.carrinho])
+            mensagem = f"Olá! Gostaria de confirmar o pedido dos seguintes produtos: {itens_texto}. Segue em anexo o comprovante do Pix."
+            link_whatsapp = f"https://wa.me/seu_numero_aqui?text={st.secrets.get('urlencode', str)(mensagem)}"
+            st.link_button("Enviar Pedido e Comprovante", link_whatsapp)
 
-# Área Principal: Grade de Produtos
-st.header("Catálogo de Produtos")
+# Área Principal - Produtos
+st.header("Produtos Disponíveis")
 
-# Exemplo de dados de produtos
 produtos = [
-    {"nome": "Copo Térmico Personalizado", "preco": "R$ 80,00", "cat": "Copos", "imagem": "https://picsum.photos/200", "destaque": False},
-    {"nome": "Camisa Estampada Algodão", "preco": "R$ 60,00", "cat": "Camisas", "imagem": "https://picsum.photos/201", "destaque": False},
-    {"nome": "Mateira em Couro", "preco": "R$ 120,00", "cat": "Mateiras", "imagem": "https://picsum.photos/202", "destaque": True}
+    {"nome": "Copo Térmico Personalizado", "preco": 80.00, "cat": "Copos", "imagem": "https://picsum.photos/200"},
+    {"nome": "Camisa Estampada Algodão", "preco": 60.00, "cat": "Camisas", "imagem": "https://picsum.photos/201"},
+    {"nome": "Mateira em Couro", "preco": 120.00, "cat": "Mateiras", "imagem": "https://picsum.photos/202"}
 ]
 
-# Seção de Destaques
-st.subheader("🔥 Produtos em Destaque")
-cols_destaque = st.columns(3)
-destaques = [p for p in produtos if p["destaque"]]
-for index, prod in enumerate(destaques):
-    with cols_destaque[index]:
-        st.info(prod["nome"])
-
-st.divider()
-
-# Filtrar produtos
-if categoria != "Todos":
-    produtos = [p for p in produtos if p["cat"] == categoria]
-
-# Criar grade de 3 colunas
 cols = st.columns(3)
 for index, prod in enumerate(produtos):
     with cols[index % 3]:
         st.image(prod["imagem"], use_container_width=True)
         st.subheader(prod["nome"])
-        st.write(f"**Preço:** {prod['preco']}")
+        st.write(f"**Preço:** R$ {prod['preco']:.2f}")
         if st.button(f"Adicionar {prod['nome']}", key=f"btn_{index}"):
-            st.success(f"{prod['nome']} adicionado ao pedido!")
+            st.session_state.carrinho.append(prod)
+            st.success(f"{prod['nome']} adicionado!")
 
