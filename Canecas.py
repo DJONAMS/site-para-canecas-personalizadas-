@@ -13,36 +13,20 @@ with col2:
 
 st.divider()
 
-# Barra Lateral - Carrinho, Mascote e Pagamento
+# Barra Lateral - Mascote e Resumo
 with st.sidebar:
-    # GIF do Hamster
-    st.image("https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNHJueGZueGZueGZueGZueGZueGZueGZueGZueGZueGZueGZueGZueCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3o7TKMGpxxHOGTdzJC/giphy.gif", caption="Seu assistente!", width=150)
-    
-    st.header("🛒 Seu Carrinho")
+    st.image("https://media.giphy.com/media/3o7TKMGpxxHOGTdzJC/giphy.gif", caption="Seu assistente!", width=150)
+    st.header("🛒 Resumo do Pedido")
     if "carrinho" not in st.session_state:
         st.session_state.carrinho = []
         
     if not st.session_state.carrinho:
         st.write("O carrinho está vazio.")
     else:
-        total = 0
-        for item in st.session_state.carrinho:
-            st.write(f"- {item['nome']}: R$ {item['preco']:.2f}")
-            total += item['preco']
-        st.write(f"**Total: R$ {total:.2f}**")
-        
-        st.divider()
-        st.header("💳 Pagamento via Pix")
-        st.info("Chave Pix (CNPJ/CPF/Celular): **SUA-CHAVE-PIX-AQUI**")
-        st.warning("Após realizar o Pix, envie o comprovante abaixo com seu nome.")
-        
-        if st.button("Finalizar Pedido no WhatsApp"):
-            itens_texto = ", ".join([i['nome'] for i in st.session_state.carrinho])
-            mensagem = f"Olá! Gostaria de confirmar o pedido dos seguintes produtos: {itens_texto}. Segue em anexo o comprovante do Pix."
-            link_whatsapp = f"https://wa.me/seu_numero_aqui?text={st.secrets.get('urlencode', str)(mensagem)}"
-            st.link_button("Enviar Pedido e Comprovante", link_whatsapp)
+        total = sum(item['preco'] for item in st.session_state.carrinho)
+        st.write(f"**Total Parcial:** R$ {total:.2f}")
 
-# Área Principal - Produtos
+# Área Principal - Produtos com Ação Direta
 st.header("Produtos Disponíveis")
 
 produtos = [
@@ -57,7 +41,49 @@ for index, prod in enumerate(produtos):
         st.image(prod["imagem"], use_container_width=True)
         st.subheader(prod["nome"])
         st.write(f"**Preço:** R$ {prod['preco']:.2f}")
-        if st.button(f"Adicionar {prod['nome']}", key=f"btn_{index}"):
+        
+        # Botões de ação para cada produto
+        if st.button(f"🛒 Adicionar ao Carrinho", key=f"btn_add_{index}"):
             st.session_state.carrinho.append(prod)
             st.success(f"{prod['nome']} adicionado!")
+            st.rerun()
+
+st.divider()
+
+# Seção Final do Carrinho e Pagamento (Visível na página principal)
+st.header("Finalização do Pedido")
+
+if "carrinho" in st.session_state and st.session_state.carrinho:
+    st.write("### Itens Selecionados:")
+    for i, item in enumerate(st.session_state.carrinho):
+        col_item1, col_item2 = st.columns([4, 1])
+        col_item1.write(f"{i+1}. {item['nome']} - R$ {item['preco']:.2f}")
+        if col_item2.button("Remover", key=f"remove_{i}"):
+            st.session_state.carrinho.pop(i)
+            st.rerun()
+            
+    total_final = sum(item['preco'] for item in st.session_state.carrinho)
+    st.subheader(f"Total Geral: R$ {total_final:.2f}")
+    st.success(f"Você está R$ {total_final:.2f} mais feliz e muito bem equipado!")
+    
+    st.divider()
+    # Visual aprimorado para a seção de pagamento
+    st.markdown("### 💳 Opções de Pagamento Seguras")
+    st.info("Aceitamos transferências via Pix (Instantâneo) e Cartões de Crédito/Débito.")
+    
+    st.subheader("🔑 Pagamento via Pix")
+    st.info("Chave Pix (CNPJ/CPF/Celular): **SUA-CHAVE-PIX-AQUI**")
+    st.warning("Após realizar o Pix, envie o comprovante abaixo com seu nome.")
+    
+    itens_texto = ", ".join([i['nome'] for i in st.session_state.carrinho])
+    mensagem = f"Olá! Gostaria de confirmar o pedido dos seguintes produtos: {itens_texto}. Segue em anexo o comprovante do pagamento."
+    link_whatsapp = f"https://wa.me/seu_numero_aqui?text={st.secrets.get('urlencode', str)(mensagem)}"
+    
+    st.link_button(
+        "💬 Finalizar Pedido no WhatsApp",
+        link_whatsapp,
+        help="Clique para abrir o WhatsApp e enviar seu pedido"
+    )
+else:
+    st.write("Seu carrinho está vazio. Adicione produtos acima para fechar o pedido.")
 
