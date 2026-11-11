@@ -32,7 +32,6 @@ st.header("Catálogo de Produtos")
 # Exemplo de dados de produtos
 produtos = [
     {"nome": "Copo Térmico Personalizado", "preco": "R$ 80,00", "cat": "Copos", "imagem": "[https://picsum.photos/200](https://picsum.photos/200)", "destaque": True}
-
     {"nome": "Camisa Estampada Algodão", "preco": "R$ 60,00", "cat": "Camisas",
     "imagem": "https://picsum.photos/201",`
  "destaque": False},
