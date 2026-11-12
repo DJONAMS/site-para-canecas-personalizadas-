@@ -31,7 +31,7 @@ unsafe_allow_html=True,
 if "carrinho" not in st.session_state:
  st.session_state.carrinho = []
 if "carrinho_modal" not in st.session_state:
-st.session_state.carrinho_modal = []
+ st.session_state.carrinho_modal = []
 IMG_COPOS = [
 "https://images.unsplash.com/photo-1514228742587-6b1558fcca3d?auto=format&fit=crop&w=500&q=80",
 "https://images.unsplash.com/photo-1577937927133-66ef06acdf18?auto=format&fit=crop&w=500&q=80",
