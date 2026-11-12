@@ -36,7 +36,7 @@ if "carrinho_modal" not in st.session_state:
     st.session_state.carrinho_modal = []
 
 # Banco de Imagens e Modelos 3D (Mockup para demonstração)
-IMG_PADRAO = "https://www.bing.com/images/search?view=detailV2&ccid=TLmtF1OE&id=7933A9C7F2BCB92C21B98453A4C0E06AD9D02C26&thid=OIP.TLmtF1OECmpE2qk_bbzmBAHaEy&mediaurl=https%3A%2F%2Fi0.wp.com%2Fartesparacanecas.com.br%2Fwp-content%2Fuploads%2F2022%2F12%2FCaneca-Foto-Casal-com-Frase-Melhor-Escolha-mockup-03.jpg%3Fw%3D1780%26ssl%3D1&cdnurl=https%3A%2F%2Fth.bing.com%2Fth%2Fid%2FR.4cb9ad1753840a6a44daa93f6dbce604%3Frik%3DJizQ2WrgwKRThA%26pid%3DImgRaw%26r%3D0&exph=1150&expw=1780&q=imagem+de+canecas+com+estampa&form=IQFRBA&ck=38D682093965CA71632D99331260C4C4&selectedindex=1&ajaxhist=0&ajaxserp=0&vt=0&sim=11"
+IMG_PADRAO = "https://br.pinterest.com/pin/95420085851556371/"
 MODELO_PADRAO = "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/CoffeeMug/glTF-Binary/CoffeeMug.glb"
 
 CATEGORIAS_SPECS = {
