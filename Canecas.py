@@ -1,8 +1,9 @@
-# ```python
-import specs
+import urllib.parse
 import streamlit as st
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Catálogo e Pedidos", layout="wide")
+
 st.markdown(
     """
     <style>
@@ -29,17 +30,19 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
 if "carrinho" not in st.session_state:
     st.session_state.carrinho = []
 if "carrinho_modal" not in st.session_state:
     st.session_state.carrinho_modal = []
-    IMG_COPOS = [
-        "https://images.unsplash.com/photo-1514228742587-6b1558fcca3d?auto=format&fit=crop&w=500&q=80",
-        "https://images.unsplash.com/photo-1577937927133-66ef06acdf18?auto=format&fit=crop&w=500&q=80",
-        "https://images.unsplash.com/photo-1570784332176-fdd73da66f03?auto=format&fit=crop&w=500&q=80",
-        "https://images.unsplash.com/photo-1602143407151-7111542de6e8?auto=format&fit=crop&w=500&q=80",
-        "https://images.unsplash.com/photo-1589365278144-c9e705f843ba?auto=format&fit=crop&w=500&q=80",
-    ]
+
+IMG_COPOS = [
+    "https://images.unsplash.com/photo-1514228742587-6b1558fcca3d?auto=format&fit=crop&w=500&q=80",
+    "https://images.unsplash.com/photo-1577937927133-66ef06acdf18?auto=format&fit=crop&w=500&q=80",
+    "https://images.unsplash.com/photo-1570784332176-fdd73da66f03?auto=format&fit=crop&w=500&q=80",
+    "https://images.unsplash.com/photo-1602143407151-7111542de6e8?auto=format&fit=crop&w=500&q=80",
+    "https://images.unsplash.com/photo-1589365278144-c9e705f843ba?auto=format&fit=crop&w=500&q=80",
+]
 IMG_CAMISAS = [
     "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=500&q=80",
     "https://images.unsplash.com/photo-1583743814966-8936f5b7be1a?auto=format&fit=crop&w=500&q=80",
@@ -54,6 +57,7 @@ IMG_MATEIRAS = [
     "https://images.unsplash.com/photo-1548036328-c9fa89d128fa?auto=format&fit=crop&w=500&q=80",
     "https://images.unsplash.com/photo-1622560480605-d83c853bc5c3?auto=format&fit=crop&w=500&q=80",
 ]
+
 MODELOS_3D_COPOS = [
     "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/CoffeeMug/glTF-Binary/CoffeeMug.glb",
 ]
@@ -63,6 +67,7 @@ MODELOS_3D_CAMISAS = [
 MODELOS_3D_MATEIRAS = [
     "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/SheenChair/glTF-Binary/SheenChair.glb",
 ]
+
 COPOS_SPECS = [
     ("Copo Térmico 473ml Preto Fosco", 80.00), ("Copo Térmico 473ml Branco Neve", 80.00),
     ("Caneca Térmica 700ml Inox Escovado", 110.00), ("Copo Térmico 473ml Azul Marinho", 85.00),
@@ -100,44 +105,40 @@ MATEIRAS_SPECS = [
     ("Mateira Minimalista Couro Nobuck", 145.00), ("Mateira Personalizada Brasão/Nome", 165.00),
 ]
 
-
-def construir_itens(prefixo: str, specs: list, imagens: list, modelos_3d: list) -> list: itens = []
-
-
-for idx, (nome, preco) in enumerate(specs[:20], start=1):
-    img_principal = imagens[(idx - 1) % len(imagens)]
-    modelo_url = modelos_3d[(idx - 1) % len(modelos_3d)]
-    itens.append({
-        "id": f"{prefixo}{idx}",
-        "nome": nome,
-        "preco": preco,
-        "imagem": img_principal,
-        "modelo_3d": modelo_url, })
+def construir_itens(prefixo: str, specs: list, imagens: list, modelos_3d: list) -> list:
+    itens = []
+    for idx, (nome, preco) in enumerate(specs[:20], start=1):
+        img_principal = imagens[(idx - 1) % len(imagens)]
+        modelo_url = modelos_3d[(idx - 1) % len(modelos_3d)]
+        itens.append({
+            "id": f"{prefixo}{idx}",
+            "nome": nome,
+            "preco": preco,
+            "imagem": img_principal,
+            "modelo_3d": modelo_url,
+        })
     return itens
+
 CATALOGO = {
     "Copos": {
         "destaque": {"nome": "Copo Térmico Personalizado", "preco": 38.00, "imagem": IMG_COPOS[0]},
-        "itens": _construir_itens("copo", COPOS_SPECS, IMG_COPOS, MODELOS_3D_COPOS),
+        "itens": construir_itens("copo", COPOS_SPECS, IMG_COPOS, MODELOS_3D_COPOS),
     },
     "Camisas": {
         "destaque": {"nome": "Camisa Estampada Personalizada", "preco": 45.00, "imagem": IMG_CAMISAS[0]},
-        "itens": _construir_itens("cam", CAMISAS_SPECS, IMG_CAMISAS, MODELOS_3D_CAMISAS),
+        "itens": construir_itens("cam", CAMISAS_SPECS, IMG_CAMISAS, MODELOS_3D_CAMISAS),
     },
     "Mateiras": {
         "destaque": {"nome": "Mateira em Couro", "preco": 85.00, "imagem": IMG_MATEIRAS[0]},
-        "itens": _construir_itens("mat", MATEIRAS_SPECS, IMG_MATEIRAS, MODELOS_3D_MATEIRAS),
+        "itens": construir_itens("mat", MATEIRAS_SPECS, IMG_MATEIRAS, MODELOS_3D_MATEIRAS),
     },
 }
 
-
 def calcular_preco_com_desconto(preco_unitario: float, quantidade: int):
     brindes = quantidade // 10
-
-
-total = quantidade * preco_unitario
-economia = brindes * preco_unitario
-return total, brindes, economia
-
+    total = quantidade * preco_unitario
+    economia = brindes * preco_unitario
+    return total, brindes, economia
 
 def _mesclar_itens_no_carrinho(destino: list, item: dict, quantidade: int):
     for item_existente in destino:
@@ -148,20 +149,18 @@ def _mesclar_itens_no_carrinho(destino: list, item: dict, quantidade: int):
             item_existente["unidades_gratis"] = brindes
             item_existente["desconto"] = econ
             item_existente["subtotal"] = total
-
-
-return
-total, brindes, econ = calcular_preco_com_desconto(item["preco"], quantidade)
-destino.append({
-    "id": item["id"],
-    "nome": item["nome"],
-    "preco_unitario": item["preco"],
-    "quantidade": quantidade,
-    "unidades_gratis": brindes,
-    "desconto": econ,
-    "subtotal": total,
-})
-
+            return
+    
+    total, brindes, econ = calcular_preco_com_desconto(item["preco"], quantidade)
+    destino.append({
+        "id": item["id"],
+        "nome": item["nome"],
+        "preco_unitario": item["preco"],
+        "quantidade": quantidade,
+        "unidades_gratis": brindes,
+        "desconto": econ,
+        "subtotal": total,
+    })
 
 def sincronizar_carrinho_modal():
     if st.session_state.carrinho_modal:
@@ -171,14 +170,8 @@ def sincronizar_carrinho_modal():
                 "nome": item_staged["nome"],
                 "preco": item_staged["preco_unitario"],
             }
-
-
-_mesclar_itens_no_carrinho(
-    st.session_state.carrinho, item_base, item_staged["quantidade"]
-)
-st.session_state.carrinho_modal = []
-sincronizar_carrinho_modal()
-
+            _mesclar_itens_no_carrinho(st.session_state.carrinho, item_base, item_staged["quantidade"])
+        st.session_state.carrinho_modal = []
 
 def renderizar_visualizador_3d(item: dict, height: int = 230):
     html_code = f"""
@@ -241,127 +234,129 @@ mv.removeAttribute("auto-rotate");
 </body>
 </html>
 """
-
-
-components.html(html_code, height=height)
-
+    components.html(html_code, height=height)
 
 def callback_adicionar_modal(item: dict):
     qtd = st.session_state.get(f"qtd_{item['id']}", 1)
-
-
-_mesclar_itens_no_carrinho(st.session_state.carrinho_modal, item, qtd)
-st.toast(f"{qtd}x {item['nome']} adicionado(s) à seleção!", icon="🛒")
-
+    _mesclar_itens_no_carrinho(st.session_state.carrinho_modal, item, qtd)
+    st.toast(f"{qtd}x {item['nome']} adicionado(s) à seleção!", icon="🛒")
 
 @st.dialog("Catálogo da Categoria", width="large")
 def abrir_modal_categoria(categoria_nome: str):
     st.subheader(f"Modelos Disponíveis: {categoria_nome} (20 opções)")
+    st.caption("Promoção: A cada 10 unidades, você ganha +1 unidade de brinde 🔥!")
+    
+    qtd_modal = sum(i["quantidade"] for i in st.session_state.carrinho_modal)
+    brindes_modal = sum(i["unidades_gratis"] for i in st.session_state.carrinho_modal)
+    total_modal = sum(i["subtotal"] for i in st.session_state.carrinho_modal)
+    
+    col_resumo, col_fechar = st.columns([3, 1])
+    with col_resumo:
+        brinde_txt = f" | Brindes: {brindes_modal} {'🔥' * brindes_modal}" if brindes_modal > 0 else ""
+        st.info(f"🛒 Selecionados nesta sessão: {qtd_modal} item(ns){brinde_txt} | Subtotal: R$ {total_modal:.2f}")
+    with col_fechar:
+        if st.button("✅ Concluir e Ir ao Carrinho", key=f"fechar_modal_{categoria_nome}", type="primary", use_container_width=True):
+            sincronizar_carrinho_modal()
+            st.rerun()
+            
+    st.divider()
+    itens = CATALOGO[categoria_nome]["itens"]
+    num_colunas = 4
+    for linha_inicio in range(0, len(itens), num_colunas):
+        cols = st.columns(num_colunas)
+        grupo = itens[linha_inicio:linha_inicio + num_colunas]
+        for idx, item in enumerate(grupo):
+            with cols[idx]:
+                with st.container(border=True):
+                    renderizar_visualizador_3d(item, height=230)
+                    st.markdown(f"**{item['nome']}**")
+                    st.write(f"Unitário: R$ {item['preco']:.2f}")
+                    qtd = st.number_input("Quantidade", min_value=1, max_value=100, value=1, step=1, key=f"qtd_{item['id']}")
+                    total_item, brindes, economia = calcular_preco_com_desconto(item["preco"], qtd)
+                    foguinhos = "🔥" * brindes if brindes > 0 else ""
+                    st.markdown(f"Total: R$ {total_item:.2f} {foguinhos}")
+                    if brindes > 0:
+                        st.success(f"{foguinhos} +{brindes} brinde(s) grátis! (Economia: R$ {economia:.2f})")
+                    st.button(
+                        "🛒 Adicionar",
+                        key=f"add_{item['id']}",
+                        use_container_width=True,
+                        on_click=callback_adicionar_modal,
+                        args=(item,),
+                    )
 
-
-st.caption("Promoção: A cada 10 unidades, você ganha +1 unidade de brinde 🔥!")
-qtd_modal = sum(i["quantidade"] for i in st.session_state.carrinho_modal)
-brindes_modal = sum(i["unidades_gratis"] for i in st.session_state.carrinho_modal)
-total_modal = sum(i["subtotal"] for i in st.session_state.carrinho_modal)
-col_resumo, col_fechar = st.columns([3, 1])
-with col_resumo:
-    brinde_txt = f" | Brindes: {brindes_modal} {'🔥' * brindes_modal}" if brindes_modal > 0 else ""
-st.info(f"🛒 Selecionados nesta sessão: {qtd_modal} item(ns){brinde_txt} | Subtotal: R$ {total_modal:.2f}")
-with col_fechar:
-    if st.button("✅ Concluir e Ir ao Carrinho", key=f"fechar_modal_{categoria_nome}", type="primary",
-                 use_container_width=True):
-        sincronizar_carrinho_modal()
-st.rerun()
-st.divider()
-itens = CATALOGO[categoria_nome]["itens"]
-num_colunas = 4
-for linha_inicio in range(0, len(itens), num_colunas):
-    cols = st.columns(num_colunas)
-grupo = itens[linha_inicio:linha_inicio + num_colunas]
-for idx, item in enumerate(grupo):
-    with cols[idx]:
-        with st.container(border=True):
-            renderizar_visualizador_3d(item, height=230)
-st.markdown(f"{item['nome']}")
-st.write(f"Unitário: R$ {item['preco']:.2f}")
-qtd = st.number_input("Quantidade", min_value=1, max_value=100, value=1, step=1, key=f"qtd_{item['id']}")
-total_item, brindes, economia = calcular_preco_com_desconto(item["preco"], qtd)
-foguinhos = "🔥" * brindes if brindes > 0 else ""
-st.markdown(f"Total: R$ {total_item:.2f} {foguinhos}")
-if brindes > 0:
-    st.success(f"{foguinhos} +{brindes} brinde(s) grátis! (Economia: R$ {economia:.2f})")
-st.button(
-    "🛒 Adicionar",
-    key=f"add_{item['id']}",
-    use_container_width=True,
-    on_click=callback_adicionar_modal,
-    args=(item,),
-)
 col1, col2 = st.columns([1, 4])
 with col1:
     st.markdown("### [LOGO]")
 with col2:
     st.title("Nome da Empresa")
+
 st.subheader("Catálogo de Produtos Personalizados")
 st.divider()
+
 with st.sidebar:
     st.header("🛒 Resumo do Pedido")
-if not st.session_state.carrinho:
-    st.write("O carrinho está vazio.")
-else:
-    total_parcial = sum(item["subtotal"] for item in st.session_state.carrinho)
-total_itens = sum(item["quantidade"] for item in st.session_state.carrinho)
-total_brindes = sum(item["unidades_gratis"] for item in st.session_state.carrinho)
-st.write(f"Itens pagos: {total_itens}")
-if total_brindes > 0:
-    st.write(f"Brindes ganhos: {total_brindes} {'🔥' * total_brindes}")
-st.write(f"Total Parcial: R$ {total_parcial:.2f}")
+    if not st.session_state.carrinho:
+        st.write("O carrinho está vazio.")
+    else:
+        total_parcial = sum(item["subtotal"] for item in st.session_state.carrinho)
+        total_itens = sum(item["quantidade"] for item in st.session_state.carrinho)
+        total_brindes = sum(item["unidades_gratis"] for item in st.session_state.carrinho)
+        st.write(f"Itens pagos: {total_itens}")
+        if total_brindes > 0:
+            st.write(f"Brindes ganhos: {total_brindes} {'🔥' * total_brindes}")
+        st.write(f"Total Parcial: R$ {total_parcial:.2f}")
+
 st.header("Produtos Disponíveis")
 st.caption("Clique em uma categoria para abrir a grade flutuante com 20 modelos.")
 categorias = list(CATALOGO.keys())
 cols_cat = st.columns(len(categorias))
 for idx, cat_nome in enumerate(categorias):
     destaque = CATALOGO[cat_nome]["destaque"]
-with cols_cat[idx]:
-    with st.container(border=True):
-        st.image(destaque["imagem"], use_container_width=True)
-st.subheader(destaque["nome"])
-st.write(f"A partir de: R$ {destaque['preco']:.2f}")
-if st.button(f"🔍 Ver opções de {cat_nome} (20 modelos)", key=f"btn_cat_{cat_nome}", use_container_width=True):
-    abrir_modal_categoria(cat_nome)
+    with cols_cat[idx]:
+        with st.container(border=True):
+            st.image(destaque["imagem"], use_container_width=True)
+            st.subheader(destaque["nome"])
+            st.write(f"A partir de: R$ {destaque['preco']:.2f}")
+            if st.button(f"🔍 Ver opções de {cat_nome} (20 modelos)", key=f"btn_cat_{cat_nome}", use_container_width=True):
+                abrir_modal_categoria(cat_nome)
+
 st.divider()
 st.header("Finalização do Pedido")
+
 if st.session_state.carrinho:
     st.write("### Itens Selecionados:")
-for i, item in enumerate(st.session_state.carrinho):
-    col_item, col_acoes = st.columns([4, 1])
-with col_item:
-    foguinhos_item = "🔥" * item["unidades_gratis"]
-info_extra = f" ({foguinhos_item} +{item['unidades_gratis']} grátis - Economia: R$ {item['desconto']:.2f})" if item[
-                                                                                                                   "unidades_gratis"] > 0 else ""
-st.write(
-    f"{i + 1}. {item['nome']} | Qtd: {item['quantidade']}x (R$ {item['preco_unitario']:.2f}/un) — Subtotal: R$ {item['subtotal']:.2f}{info_extra}")
-with col_acoes:
-    if st.button("Remover", key=f"remove_{item['id']}"):
-        st.session_state.carrinho.pop(i)
-st.rerun()
-total_final = sum(item["subtotal"] for item in st.session_state.carrinho)
-economia_total = sum(item["desconto"] for item in st.session_state.carrinho)
-brindes_totais = sum(item["unidades_gratis"] for item in st.session_state.carrinho)
-st.subheader(f"Total Geral: R$ {total_final:.2f}")
-if brindes_totais > 0:
-    st.info(
-        f"{'🔥' * brindes_totais} Você ganhou {brindes_totais} unidade(s) de brinde! Economia total: R$ {economia_total:.2f}")
-st.success(f"Pedido pronto para envio! Valor total: R$ {total_final:.2f}")
-st.divider()
-st.markdown("### 💳 Opções de Pagamento Seguras")
-st.info("Aceitamos Pix e Cartões.")
-st.subheader("🔑 Pagamento via Pix")
-st.info("Chave Pix: SUA-CHAVE-PIX-AQUI")
-linhas_pedido = []
-for item in st.session_state.carrinho:
-    bonus_txt = f" + {item['unidades_gratis']} brinde(s) 🔥" if item["unidades_gratis"] > 0 else ""
-    linhas_pedido.append(f"- {item['quantidade']}x {item['nome']}{bonus_txt} (R$ {item['subtotal']:.2f})")
+    for i, item in enumerate(st.session_state.carrinho):
+        col_item, col_acoes = st.columns([4, 1])
+        with col_item:
+            foguinhos_item = "🔥" * item["unidades_gratis"]
+            info_extra = f" ({foguinhos_item} +{item['unidades_gratis']} grátis - Economia: R$ {item['desconto']:.2f})" if item["unidades_gratis"] > 0 else ""
+            st.write(f"{i + 1}. {item['nome']} | Qtd: {item['quantidade']}x (R$ {item['preco_unitario']:.2f}/un) — Subtotal: R$ {item['subtotal']:.2f}{info_extra}")
+        with col_acoes:
+            if st.button("Remover", key=f"remove_{item['id']}"):
+                st.session_state.carrinho.pop(i)
+                st.rerun()
+
+    total_final = sum(item["subtotal"] for item in st.session_state.carrinho)
+    economia_total = sum(item["desconto"] for item in st.session_state.carrinho)
+    brindes_totais = sum(item["unidades_gratis"] for item in st.session_state.carrinho)
+    
+    st.subheader(f"Total Geral: R$ {total_final:.2f}")
+    if brindes_totais > 0:
+        st.info(f"{'🔥' * brindes_totais} Você ganhou {brindes_totais} unidade(s) de brinde! Economia total: R$ {economia_total:.2f}")
+    
+    st.success(f"Pedido pronto para envio! Valor total: R$ {total_final:.2f}")
+    st.divider()
+    st.markdown("### 💳 Opções de Pagamento Seguras")
+    st.info("Aceitamos Pix e Cartões.")
+    st.subheader("🔑 Pagamento via Pix")
+    st.info("Chave Pix: SUA-CHAVE-PIX-AQUI")
+    
+    linhas_pedido = []
+    for item in st.session_state.carrinho:
+        bonus_txt = f" + {item['unidades_gratis']} brinde(s) 🔥" if item["unidades_gratis"] > 0 else ""
+        linhas_pedido.append(f"- {item['quantidade']}x {item['nome']}{bonus_txt} (R$ {item['subtotal']:.2f})")
+    
     itens_texto = "\n".join(linhas_pedido)
     mensagem = f"Olá! Gostaria de confirmar o pedido:\n{itens_texto}\n\nTotal Geral: R$ {total_final:.2f}\nComprovante em anexo."
     mensagem_codificada = urllib.parse.quote(mensagem)
