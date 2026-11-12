@@ -36,7 +36,7 @@ if "carrinho_modal" not in st.session_state:
     st.session_state.carrinho_modal = []
 
 # Banco de Imagens e Modelos 3D (Mockup para demonstração)
-IMG_PADRAO = "https://images.unsplash.com/photo-1578749556568-bc2c40e68b61?auto=format&fit=crop&w=500&q=80"
+IMG_PADRAO = "https://www.bing.com/images/search?view=detailV2&ccid=TLmtF1OE&id=7933A9C7F2BCB92C21B98453A4C0E06AD9D02C26&thid=OIP.TLmtF1OECmpE2qk_bbzmBAHaEy&mediaurl=https%3A%2F%2Fi0.wp.com%2Fartesparacanecas.com.br%2Fwp-content%2Fuploads%2F2022%2F12%2FCaneca-Foto-Casal-com-Frase-Melhor-Escolha-mockup-03.jpg%3Fw%3D1780%26ssl%3D1&cdnurl=https%3A%2F%2Fth.bing.com%2Fth%2Fid%2FR.4cb9ad1753840a6a44daa93f6dbce604%3Frik%3DJizQ2WrgwKRThA%26pid%3DImgRaw%26r%3D0&exph=1150&expw=1780&q=imagem+de+canecas+com+estampa&form=IQFRBA&ck=38D682093965CA71632D99331260C4C4&selectedindex=1&ajaxhist=0&ajaxserp=0&vt=0&sim=11"
 MODELO_PADRAO = "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/CoffeeMug/glTF-Binary/CoffeeMug.glb"
 
 CATEGORIAS_SPECS = {
@@ -47,6 +47,7 @@ CATEGORIAS_SPECS = {
     "Chaveiros": (15.00, IMG_PADRAO, MODELO_PADRAO),
     "Almofadas": (45.00, IMG_PADRAO, MODELO_PADRAO),
 }
+
 
 def construir_itens_categoria(cat_nome: str, preco_base: float) -> list:
     itens = []
@@ -60,6 +61,7 @@ def construir_itens_categoria(cat_nome: str, preco_base: float) -> list:
         })
     return itens
 
+
 CATALOGO = {}
 for cat, (preco, img, mod) in CATEGORIAS_SPECS.items():
     CATALOGO[cat] = {
@@ -67,12 +69,14 @@ for cat, (preco, img, mod) in CATEGORIAS_SPECS.items():
         "itens": construir_itens_categoria(cat, preco)
     }
 
+
 # Lógica do Carrinho
 def calcular_promocao(preco_unitario: float, quantidade: int):
     brindes = quantidade // 10
     total = quantidade * preco_unitario
     economia = brindes * preco_unitario
     return total, brindes, economia
+
 
 def _mesclar_itens(destino: list, item: dict, quantidade: int):
     for item_existente in destino:
@@ -84,7 +88,7 @@ def _mesclar_itens(destino: list, item: dict, quantidade: int):
             item_existente["desconto"] = econ
             item_existente["subtotal"] = total
             return
-    
+
     total, brindes, econ = calcular_promocao(item["preco"], quantidade)
     destino.append({
         "id": item["id"],
@@ -96,10 +100,12 @@ def _mesclar_itens(destino: list, item: dict, quantidade: int):
         "subtotal": total
     })
 
+
 def callback_adicionar_modal(item: dict):
     qtd = st.session_state.get(f"qtd_{item['id']}", 1)
     _mesclar_itens(st.session_state.carrinho_modal, item, qtd)
     st.toast(f"{qtd}x {item['nome']} adicionado à seleção!", icon="🛒")
+
 
 def sincronizar_carrinho_modal():
     if st.session_state.carrinho_modal:
@@ -111,6 +117,7 @@ def sincronizar_carrinho_modal():
             }
             _mesclar_itens(st.session_state.carrinho, item_base, item_staged["quantidade"])
         st.session_state.carrinho_modal = []
+
 
 # Visualizador 3D
 def renderizar_visualizador_3d(item: dict, height: int = 250):
@@ -143,16 +150,17 @@ def renderizar_visualizador_3d(item: dict, height: int = 250):
     """
     components.html(html_code, height=height)
 
+
 # Modal de Categoria
 @st.dialog("Catálogo da Categoria", width="large")
 def abrir_modal_categoria(categoria_nome: str):
     st.subheader(f"Modelos Disponíveis: {categoria_nome} (20 opções)")
     st.caption("🔥 Promoção: A cada 10 unidades, ganhe 1 brinde!")
-    
+
     qtd_modal = sum(i["quantidade"] for i in st.session_state.carrinho_modal)
     brindes_modal = sum(i["unidades_gratis"] for i in st.session_state.carrinho_modal)
     total_modal = sum(i["subtotal"] for i in st.session_state.carrinho_modal)
-    
+
     col_resumo, col_fechar = st.columns([3, 1])
     with col_resumo:
         brinde_txt = f" | Brindes: {brindes_modal} 🔥" if brindes_modal > 0 else ""
@@ -161,9 +169,9 @@ def abrir_modal_categoria(categoria_nome: str):
         if st.button("✅ Confirmar e Voltar", key=f"fechar_{categoria_nome}", type="primary", use_container_width=True):
             sincronizar_carrinho_modal()
             st.rerun()
-            
+
     st.divider()
-    
+
     itens = CATALOGO[categoria_nome]["itens"]
     num_colunas = 4
     for linha_inicio in range(0, len(itens), num_colunas):
@@ -175,14 +183,16 @@ def abrir_modal_categoria(categoria_nome: str):
                     renderizar_visualizador_3d(item)
                     st.markdown(f"**{item['nome']}**")
                     st.write(f"Unitário: R$ {item['preco']:.2f}")
-                    
+
                     qtd = st.number_input("Qtd", min_value=1, max_value=100, value=1, key=f"qtd_{item['id']}")
-                    
+
                     total_item, brindes, eco = calcular_promocao(item["preco"], qtd)
                     if brindes > 0:
                         st.success(f"+{brindes} brinde(s) grátis! (Economia: R$ {eco:.2f})")
-                        
-                    st.button("🛒 Adicionar", key=f"add_{item['id']}", use_container_width=True, on_click=callback_adicionar_modal, args=(item,))
+
+                    st.button("🛒 Adicionar", key=f"add_{item['id']}", use_container_width=True,
+                              on_click=callback_adicionar_modal, args=(item,))
+
 
 # Interface Principal
 col_logo, col_titulo = st.columns([1, 6])
@@ -203,7 +213,7 @@ with st.sidebar:
         total_geral = sum(i["subtotal"] for i in st.session_state.carrinho)
         qtd_total = sum(i["quantidade"] for i in st.session_state.carrinho)
         brindes_totais = sum(i["unidades_gratis"] for i in st.session_state.carrinho)
-        
+
         st.markdown(f"""
             <div class="floating-summary">
                 <h4>Resumo do Pedido</h4>
@@ -212,7 +222,7 @@ with st.sidebar:
                 <h3 style="color: #00FF88;">Subtotal: R$ {total_geral:.2f}</h3>
             </div>
         """, unsafe_allow_html=True)
-        
+
         st.write("### Itens Selecionados")
         for i, item in enumerate(st.session_state.carrinho):
             col_desc, col_btn = st.columns([4, 1])
@@ -225,11 +235,12 @@ with st.sidebar:
                     st.session_state.carrinho.pop(i)
                     st.rerun()
             st.divider()
-            
+
         st.subheader("💳 Finalização (Pix)")
         if st.button("📲 Finalizar Pedido via WhatsApp", type="primary", use_container_width=True):
             linhas = [f"- {i['quantidade']}x {i['nome']} (R$ {i['subtotal']:.2f})" for i in st.session_state.carrinho]
-            msg = f"Olá! Gostaria de confirmar meu pedido:\n\n" + "\n".join(linhas) + f"\n\n*Total Geral: R$ {total_geral:.2f}*"
+            msg = f"Olá! Gostaria de confirmar meu pedido:\n\n" + "\n".join(
+                linhas) + f"\n\n*Total Geral: R$ {total_geral:.2f}*"
             link = f"https://wa.me/5555996374854?text={urllib.parse.quote(msg)}"
             st.link_button("👉 Clique aqui para enviar no WhatsApp", link)
 
