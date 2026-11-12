@@ -29,7 +29,7 @@ border: 1px solid rgba(255, 255, 255, 0.15);
 unsafe_allow_html=True,
 )
 if "carrinho" not in st.session_state:
-st.session_state.carrinho = []
+ st.session_state.carrinho = []
 if "carrinho_modal" not in st.session_state:
 st.session_state.carrinho_modal = []
 IMG_COPOS = [
