@@ -28,6 +28,8 @@ ARQ_LOJA = "dados_loja.json"
 ARQ_APRESENTACOES = "dados_apresentacoes.json"
 ARQ_VITRINE = "dados_vitrine.json"
 PASTA_VIDEOS = "videos"
+PASTA_ARTES = "artes"
+ARQ_ARTES_PRONTAS = "dados_artes_prontas.json"
 
 MODELO_PADRAO = (
     "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/"
@@ -112,7 +114,7 @@ COLUNAS_PEDIDOS = [
     "cpf_cnpj", "endereco_entrega",
     "nf_status", "nf_numero", "nf_chave", "nf_link",
     "ent_rua", "ent_numero", "ent_complemento", "ent_bairro",
-    "ent_cidade", "ent_uf", "ent_cep", "ent_peso",
+    "ent_cidade", "ent_uf", "ent_cep", "ent_peso", "personalizacao",
 ]
 COLUNAS_CLIQUES = ["data", "evento", "categoria", "produto"]
 
@@ -133,6 +135,22 @@ TRANSPORTADORAS = {
     "Outra": "",
 }
 FUNDOS = ["Personalização (ícones)", "Listras suaves", "Pontinhos", "Liso"]
+FONTES_PERSO = ["Padrão", "Cursiva", "Bastão", "Manuscrita", "Elegante"]
+CSS_FONTES = {"Padrão": "Arial, sans-serif", "Cursiva": "'Brush Script MT', cursive",
+              "Bastão": "Impact, 'Arial Black', sans-serif", "Manuscrita": "'Comic Sans MS', cursive",
+              "Elegante": "Georgia, 'Times New Roman', serif"}
+# Área de impressão de cada produto (largura x altura em cm). Ajuste no painel na hora de imprimir.
+MOLDES_IMPRESSAO = {
+    "Caneca 325 ml (20 x 9,5 cm)": (20.0, 9.5),
+    "Caneca 450 ml (22 x 10 cm)": (22.0, 10.0),
+    "Copo térmico 500 ml (21 x 13 cm)": (21.0, 13.0),
+    "Camiseta frente (21 x 29,7 cm)": (21.0, 29.7),
+    "Camiseta peito (10 x 10 cm)": (10.0, 10.0),
+    "Almofada 40 x 40 (38 x 38 cm)": (38.0, 38.0),
+    "Boné (10 x 6 cm)": (10.0, 6.0),
+    "Chaveiro (5 x 5 cm)": (5.0, 5.0),
+    "Tamanho livre": (10.0, 10.0),
+}
 # ---------------------------------------------------------------
 # Dados iniciais de exemplo (você edita tudo depois no painel)
 # ---------------------------------------------------------------
@@ -590,6 +608,27 @@ def registrar_clique(evento: str, categoria: str = "", produto: str = ""):
         pass
 
 
+def salvar_artes(id_pedido: str) -> str:
+    """Grava as fotos/artes do carrinho na pasta artes e devolve a lista em texto (JSON)."""
+    os.makedirs(PASTA_ARTES, exist_ok=True)
+    lista = []
+    for n, item in enumerate(st.session_state.get("carrinho", []), start=1):
+        p = item.get("perso") or {}
+        if not p:
+            continue
+        caminho = ""
+        if p.get("arte"):
+            cab, b64 = p["arte"].split(",", 1)
+            ext = "png" if "png" in cab else "webp" if "webp" in cab else "jpg"
+            caminho = os.path.join(PASTA_ARTES, f"{id_pedido}_{n}.{ext}")
+            with open(caminho, "wb") as f:
+                f.write(base64.b64decode(b64))
+        lista.append({"item": item["nome"], "quantidade": item["quantidade"], "arquivo": caminho,
+                      "texto": p.get("texto", ""), "fonte": p.get("fonte", ""), "cor_texto": p.get("cor_texto", ""),
+                      "obs": p.get("obs", ""), "escala": p.get("escala", 100), "arte_nome": p.get("arte_nome", "")})
+    return json.dumps(lista, ensure_ascii=False) if lista else ""
+
+
 def registrar_pedido(nome: str, telefone: str, email: str, itens_txt: str, total: float, forma: str):
     agora = datetime.now().strftime("%d/%m/%Y %H:%M")
     frete = st.session_state.get("frete") or {}
@@ -612,7 +651,7 @@ def registrar_pedido(nome: str, telefone: str, email: str, itens_txt: str, total
         "ent_rua": frete.get("rua", ""), "ent_numero": st.session_state.get("cli_numero", "").strip(),
         "ent_complemento": st.session_state.get("cli_comp", "").strip(), "ent_bairro": frete.get("bairro", ""),
         "ent_cidade": frete.get("cidade", ""), "ent_uf": frete.get("uf", ""), "ent_cep": frete.get("cep", ""),
-        "ent_peso": "",
+        "ent_peso": "", "personalizacao": salvar_artes(id_pedido),
     }])
     gravar_csv(ARQ_PEDIDOS, pd.concat([pedidos, novo], ignore_index=True))
 
@@ -675,8 +714,10 @@ def calcular_promocao(preco_unitario: float, quantidade: int):
     return quantidade * preco_unitario, brindes, brindes * preco_unitario
 
 
-def adicionar_ao_carrinho(item: dict, quantidade: int, variacao: str = ""):
+def adicionar_ao_carrinho(item: dict, quantidade: int, variacao: str = "", perso: dict = None):
     chave = item["id"] + ("|" + variacao if variacao else "")
+    if perso:
+        chave += "|" + uuid.uuid4().hex[:6]  # cada arte vira um item separado
     nome = item["nome"] + (f" ({variacao})" if variacao else "")
     for existente in st.session_state.carrinho:
         if existente["id"] == chave:
@@ -688,14 +729,35 @@ def adicionar_ao_carrinho(item: dict, quantidade: int, variacao: str = ""):
     st.session_state.carrinho.append({
         "id": chave, "nome": nome, "preco_unitario": item["preco"], "quantidade": quantidade,
         "unidades_gratis": brindes, "desconto": econ, "subtotal": total,
-        "imagem": item["imagem"], "categoria": item.get("categoria", ""),
+        "imagem": item["imagem"], "categoria": item.get("categoria", ""), "perso": perso or {},
     })
+
+
+def coletar_perso(item: dict) -> dict:
+    """Pega a foto, o texto e as observações que o cliente colocou na janela do produto."""
+    k = item["id"]
+    arq = st.session_state.get(f"arte_{k}")
+    perso = {"texto": st.session_state.get(f"ptxt_{k}", "").strip(),
+             "fonte": st.session_state.get(f"pfonte_{k}", "Padrão"),
+             "cor_texto": st.session_state.get(f"pcor_{k}", "#000000"),
+             "obs": st.session_state.get(f"pobs_{k}", "").strip(),
+             "escala": st.session_state.get(f"pesc_{k}", 100), "arte": ""}
+    gal = st.session_state.get(f"pgal_{k}")
+    if gal:
+        escolhida = next((a for a in ARTES_PRONTAS if a["id"] == gal), None)
+        if escolhida:
+            perso["arte"] = escolhida["imagem"]
+            perso["arte_nome"] = "Arte pronta: " + escolhida["nome"]
+    if arq is not None and arq.size <= 3 * 1024 * 1024:
+        perso["arte_nome"] = "Foto enviada pelo cliente"
+        perso["arte"] = f"data:{arq.type or 'image/png'};base64," + base64.b64encode(arq.getvalue()).decode()
+    return perso if (perso["arte"] or perso["texto"] or perso["obs"]) else {}
 
 
 def callback_adicionar(item: dict):
     qtd = st.session_state.get(f"qtd_{item['id']}", 1)
     variacao = st.session_state.get(f"var_{item['id']}", "")
-    adicionar_ao_carrinho(item, qtd, variacao)
+    adicionar_ao_carrinho(item, qtd, variacao, coletar_perso(item))
     registrar_clique("adicionou_carrinho", item.get("categoria", ""), item["nome"])
     st.session_state.link_whatsapp = None
     st.session_state.frete = None
@@ -765,6 +827,8 @@ def finalizar_pedido():
     linhas = []
     for i in st.session_state.carrinho:
         extra = f" (+{i['unidades_gratis']} brinde)" if i["unidades_gratis"] > 0 else ""
+        if i.get("perso"):
+            extra += " [personalizado: " + (i["perso"].get("texto") or "arte enviada") + "]"
         linhas.append(f"- {i['quantidade']}x {i['nome']}{extra} (R$ {i['subtotal']:.2f})")
 
     frete = st.session_state.get("frete")
@@ -869,7 +933,55 @@ def abrir_produto(item: dict):
             st.caption(f"🔥 A cada {a_cada} unidades, ganhe 1 brinde!")
         st.divider()
         if item["variacoes"]:
-            st.selectbox("Tamanho / cor", item["variacoes"], key=f"var_{item['id']}")
+            st.radio("Tamanho / tipo", item["variacoes"], key=f"var_{item['id']}", horizontal=True)
+        st.markdown("**🎨 Personalize do seu jeito**")
+        k = item["id"]
+        galeria = [a for a in ARTES_PRONTAS if not a.get("categorias") or item["categoria"] in a["categorias"]]
+        if galeria:
+            st.caption("Escolha uma das nossas artes prontas:")
+            for ini in range(0, len(galeria), 4):
+                for c, a in zip(st.columns(4), galeria[ini:ini + 4]):
+                    with c:
+                        marcada = st.session_state.get(f"pgal_{k}") == a["id"]
+                        borda = "3px solid #7c3aed" if marcada else "1px solid #d1d5db"
+                        st.markdown(f"<img src='{a['imagem']}' style='width:100%;aspect-ratio:1/1;object-fit:cover;"
+                                    f"border-radius:8px;border:{borda};'>", unsafe_allow_html=True)
+                        st.button(("✅ " if marcada else "") + (a["nome"][:14] or "Escolher"), key=f"gal_{k}_{a['id']}",
+                                  use_container_width=True, type="primary" if marcada else "secondary",
+                                  on_click=lambda kk=k, aid=a["id"]: st.session_state.update({f"pgal_{kk}": aid}))
+            if st.session_state.get(f"pgal_{k}"):
+                st.button("✖ Tirar a arte pronta", key=f"galx_{k}",
+                          on_click=lambda kk=k: st.session_state.update({f"pgal_{kk}": None}))
+        st.file_uploader("Ou envie a sua foto ou arte (até 3 MB)", type=["png", "jpg", "jpeg", "webp"], key=f"arte_{k}")
+        st.text_input("Texto ou nome na peça (opcional)", key=f"ptxt_{k}")
+        f1, f2 = st.columns(2)
+        f1.selectbox("Estilo da letra", FONTES_PERSO, key=f"pfonte_{k}")
+        f2.color_picker("Cor do texto", "#000000", key=f"pcor_{k}")
+        st.slider("Tamanho da arte na peça (%)", 30, 100, 100, step=5, key=f"pesc_{k}")
+        st.text_area("Como você quer? (posição, cores, detalhes)", key=f"pobs_{k}", height=70)
+        arq = st.session_state.get(f"arte_{k}")
+        src = ""
+        if arq is not None and arq.size > 3 * 1024 * 1024:
+            st.error("A foto passa de 3 MB. Diminua o tamanho e envie de novo.")
+        elif arq is not None:
+            src = f"data:{arq.type or 'image/png'};base64," + base64.b64encode(arq.getvalue()).decode()
+        elif st.session_state.get(f"pgal_{k}"):
+            src = next((a["imagem"] for a in ARTES_PRONTAS if a["id"] == st.session_state[f"pgal_{k}"]), "")
+        txt = st.session_state.get(f"ptxt_{k}", "")
+        if src or txt:
+            esc = st.session_state.get(f"pesc_{k}", 100)
+            forma = "3/4" if "Camis" in item["categoria"] else "1/1" if "Almof" in item["categoria"] else "2/1"
+            foto = (f"<img src='{src}' style='max-width:{esc}%;max-height:{int(esc * (0.7 if txt else 1))}%;"
+                    "object-fit:contain;'>" if src else "")
+            fonte = CSS_FONTES.get(st.session_state.get(f"pfonte_{k}", "Padrão"), "Arial")
+            cor_t = st.session_state.get(f"pcor_{k}", "#000000")
+            st.markdown(f"<div style='width:100%;aspect-ratio:{forma};background:#fff;border:2px solid #cbd5e1;"
+                        "border-radius:16px 16px 32px 32px;display:flex;flex-direction:column;align-items:center;"
+                        "justify-content:center;overflow:hidden;box-shadow:inset -20px 0 26px rgba(0,0,0,.08);'>"
+                        f"{foto}<div style='font-family:{fonte};color:{cor_t};font-size:1.4rem;font-weight:700;"
+                        f"text-align:center;'>{html.escape(txt)}</div></div>", unsafe_allow_html=True)
+            st.caption("Exemplo de como vai ficar. A gente confere tudo antes de produzir.")
+        st.divider()
         qtd = st.number_input("Quantidade", min_value=1, max_value=10000, value=1, key=f"qtd_{item['id']}")
         _, brindes, eco = calcular_promocao(item["preco"], qtd)
         if brindes > 0:
@@ -931,6 +1043,7 @@ df_produtos = carregar_produtos()
 CATALOGO = montar_catalogo(df_produtos)
 APRESENTACOES = ler_json(ARQ_APRESENTACOES, [])
 VITRINE = ler_json(ARQ_VITRINE, [])
+ARTES_PRONTAS = ler_json(ARQ_ARTES_PRONTAS, [])
 os.makedirs(PASTA_VIDEOS, exist_ok=True)
 # ===============================================================
 # APRESENTAÇÃO PARA EMPRESAS E VITRINE DE VÍDEOS (usadas no painel e na loja)
@@ -1062,7 +1175,7 @@ conteúdo inflamável, explosivo, causador de combustão ou qualquer outro proib
 # BACKUP TOTAL (um arquivo .zip com tudo)
 # ===============================================================
 ARQUIVOS_DADOS = [ARQ_PRODUTOS, ARQ_CLIENTES, ARQ_PEDIDOS, ARQ_FRETE, ARQ_CLIQUES,
-                  ARQ_LOJA, ARQ_APRESENTACOES, ARQ_VITRINE]
+                  ARQ_LOJA, ARQ_APRESENTACOES, ARQ_VITRINE, ARQ_ARTES_PRONTAS]
 
 
 def gerar_backup_zip() -> bytes:
@@ -1074,6 +1187,9 @@ def gerar_backup_zip() -> bytes:
         if os.path.isdir(PASTA_VIDEOS):
             for nome in os.listdir(PASTA_VIDEOS):
                 z.write(os.path.join(PASTA_VIDEOS, nome), arcname=f"{PASTA_VIDEOS}/{nome}")
+        if os.path.isdir(PASTA_ARTES):
+            for nome in os.listdir(PASTA_ARTES):
+                z.write(os.path.join(PASTA_ARTES, nome), arcname=f"{PASTA_ARTES}/{nome}")
         prod = ler_csv(ARQ_PRODUTOS, COLUNAS_PRODUTOS).copy()
         prod["imagem"] = prod["imagem"].apply(lambda u: "(foto enviada)" if str(u).startswith("data:") else u)
         z.writestr("LEIA-ME/produtos_para_excel.csv", prod.to_csv(index=False, sep=";").encode("utf-8-sig"))
@@ -1090,7 +1206,7 @@ def restaurar_backup_zip(arquivo) -> int:
     restaurados = 0
     with zipfile.ZipFile(arquivo) as z:
         for nome in z.namelist():
-            if nome in ARQUIVOS_DADOS or (nome.startswith(PASTA_VIDEOS + "/") and not nome.endswith("/")):
+            if nome in ARQUIVOS_DADOS or (nome.split("/")[0] in (PASTA_VIDEOS, PASTA_ARTES) and not nome.endswith("/")):
                 os.makedirs(os.path.dirname(nome) or ".", exist_ok=True)
                 with open(nome, "wb") as f:
                     f.write(z.read(nome))
@@ -1238,8 +1354,8 @@ def ir_secao(destino: str):
 # ===============================================================
 SECOES_ADMIN = {
     "VISÃO GERAL": ["📊 Resumo"],
-    "CATÁLOGO": ["📦 Produtos", "🖼️ Fotos"],
-    "VENDAS": ["👥 Clientes", "🧾 Pedidos", "🚚 Rastreio", "🏷️ Etiquetas", "📄 Nota fiscal", "📍 Frete"],
+    "CATÁLOGO": ["📦 Produtos", "🖼️ Fotos", "🎨 Galeria de artes"],
+    "VENDAS": ["👥 Clientes", "🧾 Pedidos", "🚚 Rastreio", "🏷️ Etiquetas", "🖨️ Artes", "📄 Nota fiscal", "📍 Frete"],
     "MARKETING": ["🏢 Apresentações", "🎬 Vitrine", "👁️ Interesse"],
     "CONFIGURAÇÃO": ["🎨 Loja e redes", "💾 Backup"],
 }
@@ -1942,6 +2058,142 @@ body {{ font-family: Arial, sans-serif; margin: 0; color: #000; }}
                 st.download_button(f"🖨️ Imprimir {len(lote)} pedido(s)",
                                    pacote_impressao(lote, lote_etq, lote_decl).encode("utf-8"),
                                    "etiquetas.html", "text/html", type="primary")
+    # ---------------------------------------------------------- GALERIA DE ARTES PRONTAS
+    elif secao == "🎨 Galeria de artes":
+        st.caption("Cadastre suas artes prontas. O cliente vê todas numa grade quando abre o produto, "
+                   "clica na que gostar e já vê o exemplo de como fica.")
+        cats = sorted(df_produtos["categoria"].unique().tolist())
+        with st.form("form_nova_arte", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            g_nome = c1.text_input("Nome da arte (ex.: Flores, Time, Dia dos Pais)")
+            g_cats = c2.multiselect("Mostrar em quais categorias (vazio = em todas)", cats)
+            g_arqs = st.file_uploader("Imagens (pode enviar várias de uma vez, até 2 MB cada)",
+                                      type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
+            if st.form_submit_button("➕ Adicionar à galeria", type="primary"):
+                novos = 0
+                for n, f in enumerate(g_arqs or []):
+                    if f.size > 2 * 1024 * 1024:
+                        continue
+                    base = g_nome.strip() or f.name.rsplit(".", 1)[0]
+                    nome = f"{base} {n + 1}" if g_nome.strip() and len(g_arqs) > 1 else base
+                    ARTES_PRONTAS.append({"id": uuid.uuid4().hex[:8], "nome": nome, "categorias": g_cats,
+                                          "imagem": f"data:{f.type or 'image/png'};base64,"
+                                                    + base64.b64encode(f.getvalue()).decode()})
+                    novos += 1
+                if novos:
+                    gravar_json(ARQ_ARTES_PRONTAS, ARTES_PRONTAS)
+                    st.rerun()
+                else:
+                    st.error("Envie pelo menos uma imagem de até 2 MB.")
+        filtro_g = st.selectbox("Ver artes de", ["Todas"] + cats, key="gal_filtro")
+        mostrar = [a for a in ARTES_PRONTAS if filtro_g == "Todas" or not a.get("categorias")
+                   or filtro_g in a["categorias"]]
+        st.caption(f"{len(mostrar)} arte(s).")
+        for ini in range(0, len(mostrar), 5):
+            for c, a in zip(st.columns(5), mostrar[ini:ini + 5]):
+                with c, st.container(border=True):
+                    st.markdown(f"<img src='{a['imagem']}' style='width:100%;aspect-ratio:1/1;object-fit:cover;"
+                                "border-radius:8px;'>", unsafe_allow_html=True)
+                    st.markdown(f"**{a['nome']}**")
+                    st.caption(", ".join(a.get("categorias") or []) or "Todas as categorias")
+                    if st.button("🗑️ Excluir", key=f"gal_del_{a['id']}", use_container_width=True):
+                        ARTES_PRONTAS[:] = [x for x in ARTES_PRONTAS if x["id"] != a["id"]]
+                        gravar_json(ARQ_ARTES_PRONTAS, ARTES_PRONTAS)
+                        st.rerun()
+    # ---------------------------------------------------------- ARTES PARA IMPRIMIR
+    elif secao == "🖨️ Artes":
+        def html_arte(src, a, larg, alt_cm, encaixe, escala, espelhar, borda, copias, papel) -> str:
+            """Folha para imprimir a arte no tamanho exato, em centímetros."""
+            e = lambda v: html.escape(str(v or ""))
+            ajuste = "contain" if encaixe.startswith("Caber") else "cover"
+            giro = "transform: scaleX(-1);" if espelhar else ""
+            linha = "1px dashed #555" if borda else "none"
+            fonte = CSS_FONTES.get(a.get("fonte") or "Padrão", "Arial, sans-serif")
+            alt_img = escala * (0.75 if a.get("texto") else 1)
+            foto = (f"<img src='{src}' style='width:{escala}%;height:{alt_img}%;object-fit:{ajuste};'>" if src else "")
+            tam_txt = max(0.6, min(alt_cm * 0.2, 4.0))
+            texto = (f"<div class='txt' style='font-family:{fonte};color:{e(a.get('cor_texto') or '#000')};"
+                     f"font-size:{tam_txt:.2f}cm;'>{e(a.get('texto'))}</div>" if a.get("texto") else "")
+            caixa = (f"<div class='area' style='width:{larg}cm;height:{alt_cm}cm;border:{linha};'>"
+                     f"<div class='miolo' style='{giro}'>{foto}{texto}</div></div>")
+            return f"""<html><head><meta charset='utf-8'><title>Arte</title><style>
+@page {{ size: {papel}; margin: 8mm; }}
+body {{ margin: 0; font-family: Arial; }}
+.grade {{ display: flex; flex-wrap: wrap; gap: 4mm; }}
+.area {{ box-sizing: border-box; overflow: hidden; page-break-inside: avoid; background: #fff; }}
+.miolo {{ width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; }}
+.txt {{ text-align: center; line-height: 1.1; padding: 1mm; word-break: break-word; }}
+.info {{ font-size: 10px; color: #444; margin-bottom: 3mm; }}
+</style></head><body onload='window.print()'>
+<div class='info'>{e(a.get('item'))} · área {larg} x {alt_cm} cm</div>
+<div class='grade'>{caixa * int(copias)}</div></body></html>"""
+
+        pedidos = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
+        com_arte = pedidos[pedidos["personalizacao"].astype(str).str.len() > 2]
+        st.caption("Aqui ficam as fotos, artes prontas e textos que os clientes escolheram. "
+                   "Escolha o molde, ajuste o tamanho em centímetros e imprima direto na sua impressora.")
+        if com_arte.empty:
+            st.info("Nenhum pedido com personalização ainda.")
+        else:
+            opcoes = [f"{p['id_pedido']} · {p['nome']} · {p['status']}" for _, p in com_arte.iloc[::-1].iterrows()]
+            id_sel = st.selectbox("Pedido", opcoes, key="arte_pedido").split(" · ")[0]
+            ped = pedidos[pedidos["id_pedido"] == id_sel].iloc[0]
+            try:
+                artes = json.loads(ped["personalizacao"])
+            except Exception:
+                artes = []
+            st.markdown(f"**Cliente:** {ped['nome']} · {ped['telefone']}")
+            for n, a in enumerate(artes):
+                with st.container(border=True):
+                    st.markdown(f"#### {a.get('quantidade', 1)}x {a.get('item', '')}")
+                    col_a, col_b, col_c = st.columns([1, 1.2, 1.3])
+                    tem_foto = bool(a.get("arquivo")) and os.path.exists(a["arquivo"])
+                    bruto = b""
+                    with col_a:
+                        if tem_foto:
+                            st.image(a["arquivo"], caption=a.get("arte_nome") or "Arte", use_container_width=True)
+                            with open(a["arquivo"], "rb") as f:
+                                bruto = f.read()
+                            st.download_button("⬇️ Baixar arquivo original", bruto, os.path.basename(a["arquivo"]),
+                                               key=f"orig_{id_sel}_{n}")
+                        elif a.get("arquivo"):
+                            st.warning("A foto não foi encontrada (o app pode ter reiniciado). "
+                                       "Restaure o backup ou peça de novo ao cliente.")
+                        else:
+                            st.caption("Sem foto, só texto.")
+                        if a.get("texto"):
+                            st.markdown(f"**Texto:** {a['texto']}  \n**Letra:** {a.get('fonte') or 'Padrão'} · "
+                                        f"**Cor:** {a.get('cor_texto') or '#000000'}")
+                        if a.get("obs"):
+                            st.markdown(f"**Pedido do cliente:** {a['obs']}")
+                    with col_b:
+                        molde = st.selectbox("Molde", list(MOLDES_IMPRESSAO.keys()), key=f"molde_{id_sel}_{n}")
+                        lw, lh = MOLDES_IMPRESSAO[molde]
+                        m1, m2 = st.columns(2)
+                        larg = m1.number_input("Largura (cm)", 1.0, 60.0, float(lw), 0.5, key=f"larg_{id_sel}_{n}_{molde}")
+                        alt_cm = m2.number_input("Altura (cm)", 1.0, 60.0, float(lh), 0.5, key=f"alt_{id_sel}_{n}_{molde}")
+                        encaixe = st.radio("Encaixe da foto", ["Caber inteira", "Preencher tudo (corta as bordas)"],
+                                           key=f"enc_{id_sel}_{n}")
+                        escala = st.slider("Tamanho da arte dentro da área (%)", 30, 100,
+                                           int(a.get("escala", 100) or 100), 5, key=f"esc_{id_sel}_{n}")
+                        p1, p2 = st.columns(2)
+                        espelhar = p1.checkbox("Espelhar (sublimação)", key=f"esp_{id_sel}_{n}")
+                        borda = p2.checkbox("Linha de corte", value=True, key=f"bor_{id_sel}_{n}")
+                        p3, p4 = st.columns(2)
+                        copias = p3.number_input("Cópias", 1, 50, int(a.get("quantidade", 1) or 1), key=f"cop_{id_sel}_{n}")
+                        papel = p4.selectbox("Papel", ["A4", "A3", "Carta"], key=f"pap_{id_sel}_{n}")
+                    src = ""
+                    if tem_foto:
+                        ext = os.path.splitext(a["arquivo"])[1].lower().strip(".")
+                        mime = "image/png" if ext == "png" else "image/webp" if ext == "webp" else "image/jpeg"
+                        src = f"data:{mime};base64," + base64.b64encode(bruto).decode()
+                    folha = html_arte(src, a, larg, alt_cm, encaixe, escala, espelhar, borda, copias, papel)
+                    with col_c:
+                        st.markdown("**Prévia**")
+                        components.html(folha.replace("onload='window.print()'", ""), height=380, scrolling=True)
+                        st.download_button("🖨️ Imprimir arte", folha.encode("utf-8"), f"arte_{id_sel}_{n + 1}.html",
+                                           "text/html", type="primary", use_container_width=True, key=f"imp_{id_sel}_{n}")
+                        st.caption("Na janela de impressão, deixe a escala em 100% (tamanho real).")
     # ---------------------------------------------------------- NOTA FISCAL
     elif secao == "📄 Nota fiscal":
         guia, emitir, dados = st.tabs(["📘 Como funciona", "🧾 Notas dos pedidos", "🏢 Meus dados fiscais"])
@@ -2351,6 +2603,8 @@ with st.sidebar:
             foto = html.escape(url_segura(item.get("imagem", ""), item.get("categoria", ""), item["nome"]), quote=True)
             brinde = (f"<br><span class='selo selo-ok'>+{item['unidades_gratis']} brinde</span>"
                       if item["unidades_gratis"] > 0 else "")
+            if item.get("perso"):
+                brinde += "<br><span class='selo selo-promo'>🎨 personalizado</span>"
             st.markdown(
                 f"<div class='cartao-carrinho'><img src='{foto}' onerror=\"this.onerror=null;this.src='{reserva}';\">"
                 f"<div><div class='nome'>{html.escape(item['nome'])}</div>"
