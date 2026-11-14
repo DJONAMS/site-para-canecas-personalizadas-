@@ -3321,4 +3321,41 @@ elif pagina == "categoria" and st.session_state.categoria_aberta in CATALOGO:
     itens = CATALOGO[cat_nome]["itens"]
     v1, v2 = st.columns([1, 5])
     v1.button("⬅️ Voltar", on_click=ir_para, args=("inicio",), key="voltar_cat", use_container_width=True)
-    v2.markdown(f"## {ICONES.get(cat_nome, '🏷️')} 
+    v2.markdown(f"## {ICONES.get(cat_nome, '🏷️')} {cat_nome} · {len(itens)} modelos")
+    if st.session_state.get("ultimo_adicionado"):
+        st.success(f"✅ {st.session_state.ultimo_adicionado} adicionado ao carrinho! Veja na barra lateral.")
+        st.session_state.ultimo_adicionado = None
+    busca = st.text_input("🔎 Buscar nesta categoria", key=f"busca_{cat_nome}")
+    if busca.strip():
+        itens = [i for i in itens if busca.strip().lower() in i["nome"].lower()]
+    colunas = 5 if len(itens) > 8 else 4
+    for inicio in range(0, len(itens), colunas):
+        cols = st.columns(colunas)
+        for idx, item in enumerate(itens[inicio:inicio + colunas]):
+            with cols[idx], st.container(border=True):
+                mostrar_imagem(item["imagem"], cat_nome, item["nome"], classe="cat-img")
+                selo = "<span class='selo selo-promo'>PROMOÇÃO</span> " if item["em_promo"] else ""
+                st.markdown(f"{selo}**{item['nome']}**  \nR$ {item['preco']:.2f}", unsafe_allow_html=True)
+                if st.button("🔍 Ver detalhes", key=f"ver_{item['id']}", use_container_width=True, type="primary"):
+                    abrir_produto(item)
+
+else:
+    st.markdown("### 📦 Categorias")
+    if not CATALOGO:
+        st.info("Nenhum produto ativo no momento.")
+    categorias = list(CATALOGO.keys())
+    total = len(categorias)
+    # Mais categorias = mais colunas, para tudo caber na tela sem rolar
+    colunas = 3 if total <= 3 else 4 if total <= 8 else 5 if total <= 10 else 6
+    for inicio in range(0, total, colunas):
+        cols = st.columns(colunas)
+        for idx, cat_nome in enumerate(categorias[inicio:inicio + colunas]):
+            destaque = CATALOGO[cat_nome]["destaque"]
+            with cols[idx], st.container(border=True):
+                mostrar_imagem(destaque["imagem"], cat_nome, cat_nome, classe="cat-img")
+                st.markdown(f"**{cat_nome}**  \nA partir de R$ {destaque['preco']:.2f}")
+                if st.button(f"Ver {len(CATALOGO[cat_nome]['itens'])} modelos", key=f"btn_cat_{cat_nome}",
+                             use_container_width=True):
+                    registrar_clique("abriu_categoria", cat_nome)
+                    ir_para("categoria", cat_nome)
+                    st.rerun()
