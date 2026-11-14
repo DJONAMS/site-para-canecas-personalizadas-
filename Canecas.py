@@ -30,6 +30,19 @@ ARQ_VITRINE = "dados_vitrine.json"
 PASTA_VIDEOS = "videos"
 PASTA_ARTES = "artes"
 ARQ_ARTES_PRONTAS = "dados_artes_prontas.json"
+ARQ_FORNECEDORES = "dados_fornecedores.csv"
+ARQ_ESTOQUE = "dados_estoque.csv"
+ARQ_COMPRAS = "dados_compras.csv"
+ARQ_MOVIMENTOS = "dados_movimentos.csv"
+COL_FORN = ["nome", "contato", "whatsapp", "site", "email", "o_que_vende", "prazo_dias", "pedido_minimo", "obs"]
+COL_EST = ["material", "categoria", "unidade", "quantidade", "minimo", "custo_unit", "fornecedor",
+           "usado_em", "por_unidade", "obs"]
+COL_COMP = ["data", "id_compra", "fornecedor", "material", "quantidade", "custo_unit", "total",
+            "status", "previsao", "obs"]
+COL_MOV = ["data", "material", "tipo", "quantidade", "referencia"]
+STATUS_COMPRA = ["Orçamento", "Pedida", "Paga", "A caminho", "Recebida", "Cancelada"]
+ARQ_PRECOS = "dados_precos_fornecedores.csv"
+COL_PRECO = ["data", "fornecedor", "material", "preco", "origem"]
 
 MODELO_PADRAO = (
     "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/"
@@ -608,6 +621,85 @@ def registrar_clique(evento: str, categoria: str = "", produto: str = ""):
         pass
 
 
+def numero_wpp(tel) -> str:
+    n = "".join(c for c in str(tel) if c.isdigit())
+    return ("55" + n) if n and len(n) <= 11 else n
+
+
+def registrar_movimento(material: str, tipo: str, quantidade: float, referencia: str = ""):
+    mov = ler_csv(ARQ_MOVIMENTOS, COL_MOV)
+    novo = pd.DataFrame([{"data": datetime.now().strftime("%Y-%m-%d %H:%M"), "material": material,
+                          "tipo": tipo, "quantidade": round(float(quantidade), 2), "referencia": referencia}])
+    gravar_csv(ARQ_MOVIMENTOS, pd.concat([mov, novo], ignore_index=True))
+
+
+def registrar_preco(material: str, fornecedor: str, preco: float, origem: str = "Cotação", data: str = ""):
+    """Guarda o preço que o fornecedor cobrou, para o gráfico de preços."""
+    tabela = ler_csv(ARQ_PRECOS, COL_PRECO)
+    novo = pd.DataFrame([{"data": data or datetime.now().strftime("%Y-%m-%d"), "fornecedor": fornecedor,
+                          "material": material, "preco": round(float(preco), 2), "origem": origem}])
+    gravar_csv(ARQ_PRECOS, pd.concat([tabela, novo], ignore_index=True))
+
+
+def baixar_estoque(carrinho: list, id_pedido: str):
+    """Cada venda tira do estoque, sozinha, os materiais usados naquele produto."""
+    try:
+        est = ler_csv(ARQ_ESTOQUE, COL_EST)
+        if est.empty:
+            return
+        est["quantidade"] = pd.to_numeric(est["quantidade"], errors="coerce").fillna(0.0)
+        por = pd.to_numeric(est["por_unidade"], errors="coerce").fillna(1.0)
+        mudou = False
+        for item in carrinho:
+            alvo = f"{item.get('categoria', '')} {item['nome']}".lower()
+            for idx, linha in est.iterrows():
+                chaves = [c.strip().lower() for c in str(linha["usado_em"]).split(",") if c.strip()]
+                if chaves and any(c in alvo for c in chaves):
+                    gasto = item["quantidade"] * float(por[idx])
+                    est.at[idx, "quantidade"] = est.at[idx, "quantidade"] - gasto
+                    registrar_movimento(linha["material"], "Saída (pedido)", gasto, id_pedido)
+                    mudou = True
+        if mudou:
+            gravar_csv(ARQ_ESTOQUE, est)
+    except Exception:
+        pass  # o pedido nunca falha por causa do estoque
+
+
+def analise_estoque(margem_dias: int = 7) -> pd.DataFrame:
+    """Calcula o consumo por dia, quantos dias o estoque ainda dura e quando pedir ao fornecedor."""
+    est = ler_csv(ARQ_ESTOQUE, COL_EST)
+    extras = ["consumo_dia", "prazo_forn", "dias_restantes", "repor", "comprar", "data_limite"]
+    if est.empty:
+        for c in extras:
+            est[c] = []
+        return est
+    for c in ["quantidade", "minimo", "custo_unit"]:
+        est[c] = pd.to_numeric(est[c], errors="coerce").fillna(0.0)
+    mov = ler_csv(ARQ_MOVIMENTOS, COL_MOV)
+    mov["quantidade"] = pd.to_numeric(mov["quantidade"], errors="coerce").fillna(0.0)
+    mov["dt"] = pd.to_datetime(mov["data"], format="%Y-%m-%d %H:%M", errors="coerce")
+    recentes = mov[mov["tipo"].astype(str).str.startswith("Saída")
+                   & (mov["dt"] >= datetime.now() - timedelta(days=30))]
+    consumo = recentes.groupby("material")["quantidade"].sum() / 30
+    forn = ler_csv(ARQ_FORNECEDORES, COL_FORN)
+    prazos = dict(zip(forn["nome"], pd.to_numeric(forn["prazo_dias"], errors="coerce").fillna(7)))
+    est["consumo_dia"] = est["material"].map(consumo).fillna(0.0)
+    est["prazo_forn"] = est["fornecedor"].map(prazos).fillna(7).astype(int)
+    est["dias_restantes"] = [q / c if c > 0 else float("nan") for q, c in zip(est["quantidade"], est["consumo_dia"])]
+    repor, comprar, limite = [], [], []
+    for _, r in est.iterrows():
+        d = r["dias_restantes"]
+        precisa = (r["minimo"] > 0 and r["quantidade"] <= r["minimo"]) or \
+                  (pd.notna(d) and d <= r["prazo_forn"] + margem_dias)
+        repor.append(bool(precisa))
+        sugestao = r["consumo_dia"] * 30 + r["minimo"] - r["quantidade"]
+        comprar.append(round(max(sugestao, r["minimo"], 1.0), 1) if precisa else 0.0)
+        limite.append((datetime.now() + timedelta(days=max(0.0, d - r["prazo_forn"]))).strftime("%d/%m/%Y")
+                      if pd.notna(d) else "")
+    est["repor"], est["comprar"], est["data_limite"] = repor, comprar, limite
+    return est
+
+
 def salvar_artes(id_pedido: str) -> str:
     """Grava as fotos/artes do carrinho na pasta artes e devolve a lista em texto (JSON)."""
     os.makedirs(PASTA_ARTES, exist_ok=True)
@@ -663,6 +755,7 @@ def registrar_pedido(nome: str, telefone: str, email: str, itens_txt: str, total
         "ent_peso": "", "personalizacao": salvar_artes(id_pedido),
     }])
     gravar_csv(ARQ_PEDIDOS, pd.concat([pedidos, novo], ignore_index=True))
+    baixar_estoque(st.session_state.get("carrinho", []), id_pedido)
 
     clientes = ler_csv(ARQ_CLIENTES, COLUNAS_CLIENTES)
     existente = clientes[clientes["telefone"].astype(str) == telefone]
@@ -1267,7 +1360,8 @@ conteúdo inflamável, explosivo, causador de combustão ou qualquer outro proib
 # BACKUP TOTAL (um arquivo .zip com tudo)
 # ===============================================================
 ARQUIVOS_DADOS = [ARQ_PRODUTOS, ARQ_CLIENTES, ARQ_PEDIDOS, ARQ_FRETE, ARQ_CLIQUES,
-                  ARQ_LOJA, ARQ_APRESENTACOES, ARQ_VITRINE, ARQ_ARTES_PRONTAS]
+                  ARQ_LOJA, ARQ_APRESENTACOES, ARQ_VITRINE, ARQ_ARTES_PRONTAS,
+                  ARQ_FORNECEDORES, ARQ_ESTOQUE, ARQ_COMPRAS, ARQ_MOVIMENTOS, ARQ_PRECOS]
 
 
 def gerar_backup_zip() -> bytes:
@@ -1341,22 +1435,25 @@ h1, h2, h3, h4, h5, h6, p, span, label, li, div { color: #1f2937; }
 /* ---------- MENU FIXO À ESQUERDA ---------- */
 .st-key-menu_admin {
     position: fixed; top: 0; left: 0; bottom: 0; width: 260px; z-index: 999990;
-    background: #ffffff; border-right: 1px solid #dbe1ea; padding: 18px 14px 40px;
-    overflow-y: auto; box-shadow: 4px 0 16px rgba(15, 23, 42, .08); }
-.st-key-menu_admin [data-testid="stVerticalBlock"] { gap: .3rem; }
+    background: #ffffff; border-right: 1px solid #dbe1ea; padding: 12px 12px 10px;
+    overflow-y: auto; scrollbar-width: none; box-shadow: 4px 0 16px rgba(15, 23, 42, .08); }
+.st-key-menu_admin::-webkit-scrollbar { display: none; }
+.st-key-menu_admin [data-testid="stMarkdownContainer"] p, .st-key-menu_admin [data-testid="stMarkdown"],
+.st-key-menu_admin .stButton, .st-key-menu_admin [data-testid="stElementContainer"] { margin: 0 !important; }
+.st-key-menu_admin [data-testid="stVerticalBlock"] { gap: .22rem; }
 .st-key-menu_admin .stButton > button {
     width: 100%; justify-content: flex-start !important; text-align: left;
     background: #f8fafc !important; color: #1f2937 !important;
     border: 1px solid #e2e8f0 !important; border-radius: 10px !important;
-    padding: 8px 12px !important; font-weight: 600 !important; box-shadow: none !important; }
+    padding: 2px 10px !important; min-height: 0 !important; height: clamp(30px, calc((100vh - 200px) / 18), 52px); font-weight: 600 !important; box-shadow: none !important; }
 .st-key-menu_admin .stButton > button div { justify-content: flex-start !important; }
-.st-key-menu_admin .stButton > button p { color: inherit !important; font-size: .95rem; }
+.st-key-menu_admin .stButton > button p { color: inherit !important; font-size: clamp(.8rem, 1.7vh, .98rem); margin: 0 !important; line-height: 1.1; }
 .st-key-menu_admin .stButton > button:hover { background: #ede9fe !important; border-color: #8b5cf6 !important; }
 .st-key-menu_admin .stButton > button[kind="primary"] {
     background: linear-gradient(90deg, #7c3aed, #06b6d4) !important; color: #ffffff !important; border: none !important; }
-.adm-logo { font-size: 1.2rem; font-weight: 800; color: #111827 !important; }
-.adm-sub { font-size: .8rem; color: #6b7280 !important; margin-bottom: 8px; }
-.adm-grupo { font-size: .7rem; letter-spacing: .12em; color: #7c3aed !important; font-weight: 800; margin: 12px 0 2px; }
+.adm-logo { font-size: 1rem; font-weight: 800; color: #111827 !important; }
+.adm-sub { font-size: .72rem; color: #6b7280 !important; margin-bottom: 2px; }
+.adm-grupo { font-size: .7rem; letter-spacing: .12em; color: #7c3aed !important; font-weight: 800; margin: 6px 0 1px; font-size: .68rem !important; }
 @media (max-width: 900px) {
     .st-key-menu_admin { position: static; width: auto; box-shadow: none; border: 1px solid #dbe1ea; border-radius: 14px; }
     .block-container { padding-left: 1rem !important; padding-right: 1rem !important; } }
@@ -1448,6 +1545,7 @@ SECOES_ADMIN = {
     "VISÃO GERAL": ["📊 Resumo"],
     "CATÁLOGO": ["📦 Produtos", "🖼️ Fotos", "🎨 Galeria de artes"],
     "VENDAS": ["👥 Clientes", "🧾 Pedidos", "🚚 Rastreio", "🏷️ Etiquetas", "🖨️ Artes", "📄 Nota fiscal", "📍 Frete"],
+    "COMPRAS": ["🏭 Estoque e compras"],
     "MARKETING": ["🏢 Apresentações", "🎬 Vitrine", "👁️ Interesse"],
     "CONFIGURAÇÃO": ["🎨 Loja e redes", "💾 Backup"],
 }
@@ -1464,7 +1562,7 @@ if st.session_state.admin:
             for s in secoes:
                 st.button(s, key=f"menu_{s}", use_container_width=True, on_click=ir_secao, args=(s,),
                           type="primary" if st.session_state.secao_admin == s else "secondary")
-        st.markdown("<div class='adm-grupo'>SAIR</div>", unsafe_allow_html=True)
+        st.markdown("<div class='adm-grupo'>&nbsp;</div>", unsafe_allow_html=True)
         if st.button("🚪 Voltar para a loja", key="menu_sair", use_container_width=True):
             st.session_state.admin = False
             st.rerun()
@@ -1472,6 +1570,15 @@ if st.session_state.admin:
     secao = st.session_state.secao_admin
     st.markdown(f"<div class='adm-topo'><span class='t'>{html.escape(secao)}</span>"
                 f"<span class='d'>{datetime.now().strftime('%d/%m/%Y')}</span></div>", unsafe_allow_html=True)
+
+    # ----- Aviso automático de reposição, em todas as telas do painel -----
+    _aviso = analise_estoque(int(LOJA.get("estoque_margem_dias", 7)))
+    _aviso = _aviso[_aviso["repor"] == True] if len(_aviso) else _aviso
+    if len(_aviso) and secao != "🏭 Estoque e compras":
+        av1, av2 = st.columns([4, 1])
+        av1.warning(f"⚠️ Hora de repor {len(_aviso)} material(is): " + ", ".join(_aviso["material"].head(5).tolist()))
+        av2.button("📦 Ver e repor", key="aviso_estoque", type="primary", use_container_width=True,
+                   on_click=ir_secao, args=("🏭 Estoque e compras",))
 
     # ---------------------------------------------------------- RESUMO (dashboard)
     if secao == "📊 Resumo":
@@ -2286,6 +2393,340 @@ body {{ margin: 0; font-family: Arial; }}
                         st.download_button("🖨️ Imprimir arte", folha.encode("utf-8"), f"arte_{id_sel}_{n + 1}.html",
                                            "text/html", type="primary", use_container_width=True, key=f"imp_{id_sel}_{n}")
                         st.caption("Na janela de impressão, deixe a escala em 100% (tamanho real).")
+    # ---------------------------------------------------------- ESTOQUE, FORNECEDORES E COMPRAS
+    elif secao == "🏭 Estoque e compras":
+        margem = int(LOJA.get("estoque_margem_dias", 7))
+        forn = ler_csv(ARQ_FORNECEDORES, COL_FORN)
+        est = ler_csv(ARQ_ESTOQUE, COL_EST)
+        comp = ler_csv(ARQ_COMPRAS, COL_COMP)
+        mov = ler_csv(ARQ_MOVIMENTOS, COL_MOV)
+        for c in ["quantidade", "minimo", "custo_unit", "por_unidade"]:
+            est[c] = pd.to_numeric(est[c], errors="coerce").fillna(1.0 if c == "por_unidade" else 0.0)
+        for c in ["quantidade", "custo_unit", "total"]:
+            comp[c] = pd.to_numeric(comp[c], errors="coerce").fillna(0.0)
+        an = analise_estoque(margem)
+        repor = an[an["repor"] == True] if len(an) else an
+        nomes_forn = [n for n in forn["nome"].tolist() if n]
+
+        def entrar_estoque(material: str, qtd: float, custo: float, fornecedor: str, ref: str):
+            base = ler_csv(ARQ_ESTOQUE, COL_EST)
+            base["quantidade"] = pd.to_numeric(base["quantidade"], errors="coerce").fillna(0.0)
+            alvo = base["material"] == material
+            if alvo.any():
+                base.loc[alvo, "quantidade"] = base.loc[alvo, "quantidade"] + qtd
+                if custo > 0:
+                    base.loc[alvo, "custo_unit"] = custo
+            else:
+                linha = {c: "" for c in COL_EST}
+                linha.update(material=material, quantidade=qtd, custo_unit=custo, fornecedor=fornecedor,
+                             unidade="un", minimo=0, por_unidade=1)
+                base = pd.concat([base, pd.DataFrame([linha])], ignore_index=True)
+            gravar_csv(ARQ_ESTOQUE, base)
+            registrar_movimento(material, "Entrada (compra)", qtd, ref)
+
+        k = st.columns(4)
+        k[0].markdown(cartao_kpi("Precisa repor", str(len(repor)), GRAD["rosa"]), unsafe_allow_html=True)
+        k[1].markdown(cartao_kpi("Materiais", str(len(est)), GRAD["azul"]), unsafe_allow_html=True)
+        k[2].markdown(cartao_kpi("Valor em estoque", brl(float((est["quantidade"] * est["custo_unit"]).sum())),
+                                 GRAD["agua"]), unsafe_allow_html=True)
+        k[3].markdown(cartao_kpi("Compras em aberto",
+                                 str(int((~comp["status"].isin(["Recebida", "Cancelada"])).sum())), GRAD["roxo"]),
+                      unsafe_allow_html=True)
+        st.write("")
+        t_rep, t_est, t_forn, t_comp, t_preco, t_mov = st.tabs(
+            ["⚠️ Repor agora", "📦 Meu estoque", "🏭 Fornecedores", "🛍️ Compras", "📈 Preços", "📜 Movimentações"])
+
+        with t_rep:
+            st.caption("O painel olha quanto saiu nos últimos 30 dias, calcula quantos dias o estoque ainda dura "
+                       "e avisa antes de acabar, contando o prazo de entrega do fornecedor.")
+            c1, c2 = st.columns([3, 1])
+            nova_margem = c1.slider("Avisar com quantos dias de folga (além do prazo do fornecedor)", 1, 30, margem)
+            if c2.button("💾 Salvar folga", key="salvar_margem"):
+                LOJA["estoque_margem_dias"] = int(nova_margem)
+                gravar_loja(LOJA)
+                st.rerun()
+            if est.empty:
+                st.info("Cadastre seus materiais na aba Meu estoque para o controle automático começar.")
+            elif repor.empty:
+                st.success("✅ Tudo em dia. Nenhum material precisa de reposição agora.")
+            for n, (_, r) in enumerate(repor.iterrows()):
+                with st.container(border=True):
+                    a1, a2, a3 = st.columns([3, 1.4, 1.6])
+                    d = r["dias_restantes"]
+                    dura = f"dura cerca de {d:.0f} dia(s)" if pd.notna(d) else "abaixo do mínimo"
+                    a1.markdown(f"**{r['material']}** · tem {r['quantidade']:g} {r['unidade'] or 'un'} · **{dura}**")
+                    a1.caption(f"Gasta {r['consumo_dia']:.1f} por dia · entrega do fornecedor: {r['prazo_forn']} dias"
+                               + (f" · peça até {r['data_limite']}" if r["data_limite"] else " · peça hoje"))
+                    a2.metric("Comprar", f"{r['comprar']:g} {r['unidade'] or 'un'}")
+                    f = forn[forn["nome"] == r["fornecedor"]]
+                    if len(f):
+                        fr = f.iloc[0]
+                        msg = (f"Olá {fr['contato'] or fr['nome']}! Quero fazer um pedido de {r['comprar']:g} "
+                               f"{r['unidade'] or 'unidades'} de {r['material']}. Pode me passar o preço e o prazo?")
+                        if fr["whatsapp"]:
+                            a3.link_button("💬 Pedir no WhatsApp",
+                                           f"https://wa.me/{numero_wpp(fr['whatsapp'])}?text={urllib.parse.quote(msg)}",
+                                           type="primary", use_container_width=True)
+                        if fr["site"]:
+                            a3.link_button("🌐 Site do fornecedor", fr["site"], use_container_width=True)
+                    else:
+                        a3.caption("Escolha o fornecedor deste material na aba Meu estoque.")
+
+        with t_est:
+            st.caption("Em 'Usado em', escreva as categorias ou produtos que gastam este material, separados "
+                       "por vírgula (ex.: Canecas, Copos). Em 'Gasta por peça', quanto sai a cada produto vendido.")
+            est_edit = st.data_editor(
+                est[COL_EST], num_rows="dynamic", use_container_width=True, key="editor_estoque", height=360,
+                column_config={
+                    "material": st.column_config.TextColumn("Material", required=True),
+                    "categoria": st.column_config.TextColumn("Tipo (ex.: caneca branca, tinta)"),
+                    "unidade": st.column_config.TextColumn("Unidade (un, folha, ml)"),
+                    "quantidade": st.column_config.NumberColumn("Tenho", step=1.0, format="%g"),
+                    "minimo": st.column_config.NumberColumn("Mínimo", min_value=0.0, step=1.0, format="%g"),
+                    "custo_unit": st.column_config.NumberColumn("Custo unit. (R$)", min_value=0.0, format="%.2f"),
+                    "fornecedor": st.column_config.SelectboxColumn("Fornecedor", options=nomes_forn or [""]),
+                    "usado_em": st.column_config.TextColumn("Usado em"),
+                    "por_unidade": st.column_config.NumberColumn("Gasta por peça", min_value=0.0, step=0.5, format="%g"),
+                    "obs": st.column_config.TextColumn("Observações", width="large"),
+                })
+            if st.button("💾 Salvar estoque", type="primary", key="salvar_estoque"):
+                gravar_csv(ARQ_ESTOQUE, est_edit)
+                st.rerun()
+            st.markdown("**Lançar entrada ou saída rápida**")
+            with st.form("mov_rapido", clear_on_submit=True):
+                m1, m2, m3, m4 = st.columns([2, 1, 1, 1])
+                mat = m1.selectbox("Material", est["material"].tolist())
+                tipo = m2.selectbox("Tipo", ["Entrada", "Saída"])
+                qtd = m3.number_input("Quantidade", min_value=0.0, value=1.0, step=1.0)
+                lancar = m4.form_submit_button("Lançar", type="primary")
+            if lancar and mat:
+                base = ler_csv(ARQ_ESTOQUE, COL_EST)
+                base["quantidade"] = pd.to_numeric(base["quantidade"], errors="coerce").fillna(0.0)
+                sinal = 1 if tipo == "Entrada" else -1
+                base.loc[base["material"] == mat, "quantidade"] += sinal * qtd
+                gravar_csv(ARQ_ESTOQUE, base)
+                registrar_movimento(mat, f"{tipo} (manual)", qtd)
+                st.rerun()
+
+        with t_forn:
+            forn["prazo_dias"] = pd.to_numeric(forn["prazo_dias"], errors="coerce").fillna(7).astype(int)
+            forn_edit = st.data_editor(
+                forn, num_rows="dynamic", use_container_width=True, key="editor_forn", height=300,
+                column_config={
+                    "nome": st.column_config.TextColumn("Fornecedor", required=True),
+                    "contato": st.column_config.TextColumn("Pessoa de contato"),
+                    "whatsapp": st.column_config.TextColumn("WhatsApp (DDD + número)"),
+                    "site": st.column_config.LinkColumn("Site"),
+                    "email": st.column_config.TextColumn("E-mail"),
+                    "o_que_vende": st.column_config.TextColumn("O que vende"),
+                    "prazo_dias": st.column_config.NumberColumn("Prazo de entrega (dias)", min_value=0, step=1),
+                    "pedido_minimo": st.column_config.TextColumn("Pedido mínimo"),
+                    "obs": st.column_config.TextColumn("Observações", width="large"),
+                })
+            if st.button("💾 Salvar fornecedores", type="primary", key="salvar_forn"):
+                gravar_csv(ARQ_FORNECEDORES, forn_edit)
+                st.rerun()
+            for i0 in range(0, len(forn), 3):
+                for c, (_, fr) in zip(st.columns(3), forn.iloc[i0:i0 + 3].iterrows()):
+                    with c, st.container(border=True):
+                        st.markdown(f"**{fr['nome']}**  \n{fr['o_que_vende']}")
+                        st.caption(f"Entrega em {fr['prazo_dias']} dias" + (f" · mínimo {fr['pedido_minimo']}"
+                                                                           if fr["pedido_minimo"] else ""))
+                        if fr["whatsapp"]:
+                            st.link_button("💬 WhatsApp", f"https://wa.me/{numero_wpp(fr['whatsapp'])}",
+                                           use_container_width=True)
+                        if fr["site"]:
+                            st.link_button("🌐 Site", fr["site"], use_container_width=True)
+                        if "@" in str(fr["email"]):
+                            st.link_button("✉️ E-mail", f"mailto:{fr['email']}", use_container_width=True)
+
+        with t_comp:
+            st.caption("Quando uma compra muda para Recebida, a quantidade entra sozinha no estoque.")
+            with st.form("nova_compra", clear_on_submit=True):
+                c1, c2, c3 = st.columns(3)
+                n_forn = c1.selectbox("Fornecedor", nomes_forn or [""])
+                n_mat = c2.selectbox("Material", est["material"].tolist() + ["(novo material)"])
+                n_novo = c3.text_input("Nome do material novo")
+                c4, c5, c6, c7 = st.columns(4)
+                n_qtd = c4.number_input("Quantidade", min_value=0.0, value=1.0, step=1.0)
+                n_custo = c5.number_input("Custo unit. (R$)", min_value=0.0, value=0.0, step=0.5)
+                n_st = c6.selectbox("Situação", STATUS_COMPRA, index=1)
+                n_prev = c7.text_input("Previsão de chegada", placeholder="25/11/2026")
+                n_obs = st.text_input("Observações")
+                if st.form_submit_button("➕ Registrar compra", type="primary"):
+                    material = n_novo.strip() if n_mat == "(novo material)" else n_mat
+                    if not material:
+                        st.error("Digite o nome do material.")
+                    else:
+                        id_c = f"COMP-{len(comp) + 1:04d}"
+                        nova = pd.DataFrame([{"data": datetime.now().strftime("%d/%m/%Y"), "id_compra": id_c,
+                                              "fornecedor": n_forn, "material": material, "quantidade": n_qtd,
+                                              "custo_unit": n_custo, "total": round(n_qtd * n_custo, 2),
+                                              "status": n_st, "previsao": n_prev, "obs": n_obs}])
+                        gravar_csv(ARQ_COMPRAS, pd.concat([comp, nova], ignore_index=True))
+                        if n_custo > 0:
+                            registrar_preco(material, n_forn, n_custo, f"Compra {id_c}")
+                        if n_st == "Recebida":
+                            entrar_estoque(material, n_qtd, n_custo, n_forn, id_c)
+                        st.rerun()
+            st.metric("Total gasto em compras recebidas", brl(float(comp[comp["status"] == "Recebida"]["total"].sum())))
+            antes = dict(zip(comp["id_compra"], comp["status"]))
+            comp_edit = st.data_editor(
+                comp.iloc[::-1], use_container_width=True, key="editor_compras", num_rows="fixed", height=320,
+                column_config={
+                    "data": st.column_config.TextColumn("Data", disabled=True),
+                    "id_compra": st.column_config.TextColumn("Nº", disabled=True),
+                    "fornecedor": st.column_config.TextColumn("Fornecedor", disabled=True),
+                    "material": st.column_config.TextColumn("Material", disabled=True),
+                    "quantidade": st.column_config.NumberColumn("Qtd", disabled=True, format="%g"),
+                    "custo_unit": st.column_config.NumberColumn("Custo unit.", format="%.2f"),
+                    "total": st.column_config.NumberColumn("Total (R$)", disabled=True, format="%.2f"),
+                    "status": st.column_config.SelectboxColumn("Situação", options=STATUS_COMPRA),
+                    "previsao": st.column_config.TextColumn("Previsão"),
+                    "obs": st.column_config.TextColumn("Observações", width="large"),
+                })
+            if st.button("💾 Salvar compras", type="primary", key="salvar_compras"):
+                completo = comp.copy()
+                for _, linha in comp_edit.iterrows():
+                    alvo = completo["id_compra"] == linha["id_compra"]
+                    for campo in ["custo_unit", "status", "previsao", "obs"]:
+                        completo.loc[alvo, campo] = linha[campo]
+                    completo.loc[alvo, "total"] = round(float(linha["quantidade"]) * float(linha["custo_unit"]), 2)
+                    if linha["status"] == "Recebida" and antes.get(linha["id_compra"]) != "Recebida":
+                        entrar_estoque(linha["material"], float(linha["quantidade"]), float(linha["custo_unit"]),
+                                       linha["fornecedor"], linha["id_compra"])
+                gravar_csv(ARQ_COMPRAS, completo)
+                st.rerun()
+
+        with t_mov:
+            if mov.empty:
+                st.info("As entradas e saídas aparecem aqui sozinhas, a cada venda e a cada compra recebida.")
+            else:
+                st.dataframe(mov.iloc[::-1], use_container_width=True, hide_index=True, height=400)
+
+        with t_preco:
+            st.caption("Anote cada preço que o fornecedor te passar. As compras com custo entram aqui sozinhas.")
+            with st.form("novo_preco", clear_on_submit=True):
+                p1, p2, p3, p4, p5 = st.columns([2, 2, 1, 1, 1])
+                pr_mat = p1.selectbox("Material", est["material"].tolist() or [""])
+                pr_forn = p2.selectbox("Fornecedor", nomes_forn or [""])
+                pr_val = p3.number_input("Preço unit. (R$)", min_value=0.0, step=0.5)
+                pr_data = p4.date_input("Data", value=datetime.now(), format="DD/MM/YYYY")
+                anotar = p5.form_submit_button("➕ Anotar", type="primary")
+            if anotar and pr_mat and pr_val > 0:
+                registrar_preco(pr_mat, pr_forn, pr_val, "Cotação", pr_data.strftime("%Y-%m-%d"))
+                st.rerun()
+            precos = ler_csv(ARQ_PRECOS, COL_PRECO)
+            precos["preco"] = pd.to_numeric(precos["preco"], errors="coerce")
+            precos["dt"] = pd.to_datetime(precos["data"], errors="coerce")
+            precos = precos.dropna(subset=["preco", "dt"])
+            if precos.empty:
+                st.info("Anote os primeiros preços para o gráfico aparecer.")
+            else:
+                # ----- Visão geral: todas as categorias e materiais de uma vez -----
+                cat_map = dict(zip(est["material"], est["categoria"].astype(str)))
+                precos["categoria"] = precos["material"].map(cat_map).fillna("").replace("", "Sem categoria")
+                cats_p = sorted(precos["categoria"].unique().tolist())
+                st.markdown("#### 📊 Visão geral de todos os preços")
+                filtro_cat = st.multiselect("Categorias", cats_p, default=cats_p, key="preco_cats")
+                base_p = precos[precos["categoria"].isin(filtro_cat)] if filtro_cat else precos
+                linhas_g = []
+                for mat, g in base_p.sort_values("dt").groupby("material"):
+                    ult = float(g["preco"].iloc[-1])
+                    ant = float(g["preco"].iloc[-2]) if len(g) > 1 else ult
+                    v = (ult - ant) / ant * 100 if ant else 0.0
+                    rec = comp[(comp["material"] == mat) & (comp["status"] == "Recebida")]
+                    q = float(rec["quantidade"].sum())
+                    pago = float(rec["total"].sum()) / q if q > 0 else float(g["preco"].mean())
+                    por_forn = g.groupby("fornecedor")["preco"].mean()
+                    linhas_g.append({
+                        "categoria": g["categoria"].iloc[0], "material": mat, "preco_medio": round(pago, 2),
+                        "ultimo": round(ult, 2), "variacao": round(v, 1),
+                        "tendencia": "📈 Subindo" if v > 1 else "📉 Baixando" if v < -1 else "➡️ Estável",
+                        "mais_barato": por_forn.idxmin() if len(por_forn) else "",
+                        "fornecedores": int(g["fornecedor"].nunique()), "precos": int(len(g))})
+                geral = pd.DataFrame(linhas_g)
+                if len(geral):
+                    kg = st.columns(4)
+                    kg[0].markdown(cartao_kpi("Materiais acompanhados", str(len(geral)), GRAD["roxo"]), unsafe_allow_html=True)
+                    kg[1].markdown(cartao_kpi("Subindo", str(int((geral["variacao"] > 1).sum())), GRAD["rosa"]),
+                                   unsafe_allow_html=True)
+                    kg[2].markdown(cartao_kpi("Baixando", str(int((geral["variacao"] < -1).sum())), GRAD["agua"]),
+                                   unsafe_allow_html=True)
+                    kg[3].markdown(cartao_kpi("Categorias", str(geral["categoria"].nunique()), GRAD["azul"]),
+                                   unsafe_allow_html=True)
+                    st.write("")
+                    st.dataframe(geral.sort_values(["categoria", "material"]), hide_index=True, use_container_width=True,
+                                 column_config={
+                                     "categoria": "Categoria", "material": "Material",
+                                     "preco_medio": st.column_config.NumberColumn("Preço médio pago (R$)", format="%.2f"),
+                                     "ultimo": st.column_config.NumberColumn("Último preço (R$)", format="%.2f"),
+                                     "variacao": st.column_config.NumberColumn("Variação (%)", format="%+.1f"),
+                                     "tendencia": "Tendência", "mais_barato": "Fornecedor mais barato",
+                                     "fornecedores": "Fornecedores", "precos": "Preços anotados"})
+                    g1, g2 = st.columns([1, 1.6])
+                    with g1, st.container(border=True):
+                        st.markdown("**Quanto cada preço subiu ou baixou (%)**")
+                        grafico(alt.Chart(geral).mark_bar(cornerRadius=4).encode(
+                            y=alt.Y("material:N", title=None, sort="-x"),
+                            x=alt.X("variacao:Q", title="% em relação ao preço anterior"),
+                            color=alt.condition(alt.datum.variacao > 0, alt.value("#ef4444"), alt.value("#10b981")),
+                            tooltip=["categoria", "material", alt.Tooltip("variacao:Q", title="Variação %", format="+.1f")]
+                        ).properties(height=max(160, 28 * len(geral))))
+                    with g2, st.container(border=True):
+                        st.markdown("**Preço de cada material ao longo do tempo**")
+                        grafico(alt.Chart(base_p).mark_line(point=True, strokeWidth=2).encode(
+                            x=alt.X("dt:T", title=None, axis=alt.Axis(format="%d/%m")),
+                            y=alt.Y("preco:Q", title="R$", scale=alt.Scale(zero=False)),
+                            color=alt.Color("fornecedor:N", title=None, legend=alt.Legend(orient="top")),
+                            tooltip=["material", "fornecedor", alt.Tooltip("dt:T", format="%d/%m/%Y"),
+                                     alt.Tooltip("preco:Q", format=".2f")]
+                        ).properties(width=200, height=130).facet(facet=alt.Facet("material:N", title=None), columns=3
+                        ).resolve_scale(y="independent"))
+                st.divider()
+                st.markdown("#### 🔎 Detalhe de um material")
+                mat_sel = st.selectbox("Ver preços de", sorted(precos["material"].unique().tolist()), key="preco_mat")
+                dados = precos[precos["material"] == mat_sel].sort_values("dt")
+                media = float(dados["preco"].mean())
+                ultimo = float(dados["preco"].iloc[-1])
+                anterior = float(dados["preco"].iloc[-2]) if len(dados) > 1 else ultimo
+                var = (ultimo - anterior) / anterior * 100 if anterior else 0.0
+                tendencia = "📈 Subindo" if var > 1 else "📉 Baixando" if var < -1 else "➡️ Estável"
+                menor = dados.loc[dados["preco"].idxmin()]
+                recebidas = comp[(comp["material"] == mat_sel) & (comp["status"] == "Recebida")]
+                pago_medio = (float(recebidas["total"].sum()) / float(recebidas["quantidade"].sum())
+                              if float(recebidas["quantidade"].sum()) > 0 else media)
+                m = st.columns(4)
+                m[0].metric("Preço médio que você paga", brl(pago_medio))
+                m[1].metric("Último preço", brl(ultimo), f"{var:+.1f}%", delta_color="inverse")
+                m[2].metric("Menor preço", brl(float(menor["preco"])), menor["fornecedor"] or "-", delta_color="off")
+                m[3].metric("Tendência", tendencia)
+                with st.container(border=True):
+                    st.markdown(f"**Preço de {mat_sel} ao longo do tempo** (linha vermelha = média)")
+                    linhas = alt.Chart(dados).mark_line(point=alt.OverlayMarkDef(size=70, filled=True), strokeWidth=3).encode(
+                        x=alt.X("dt:T", title=None, axis=alt.Axis(format="%d/%m/%y")),
+                        y=alt.Y("preco:Q", title="R$ por unidade", scale=alt.Scale(zero=False)),
+                        color=alt.Color("fornecedor:N", title=None, legend=alt.Legend(orient="top"),
+                                        scale=alt.Scale(range=["#7c3aed", "#06b6d4", "#ec4899", "#f59e0b", "#10b981"])),
+                        tooltip=[alt.Tooltip("dt:T", title="Data", format="%d/%m/%Y"), "fornecedor",
+                                 alt.Tooltip("preco:Q", title="Preço", format=".2f"), "origem"])
+                    linha_media = alt.Chart(pd.DataFrame({"m": [media]})).mark_rule(
+                        color="#ef4444", strokeDash=[6, 4], strokeWidth=2).encode(y="m:Q")
+                    grafico((linhas + linha_media).properties(height=300))
+                st.markdown("**Comparar fornecedores**")
+                resumo = dados.groupby("fornecedor").agg(
+                    preco_medio=("preco", "mean"), menor=("preco", "min"), maior=("preco", "max"),
+                    ultimo=("preco", "last"), cotacoes=("preco", "count")).round(2).sort_values("preco_medio").reset_index()
+                st.dataframe(resumo, hide_index=True, use_container_width=True, column_config={
+                    "fornecedor": "Fornecedor",
+                    "preco_medio": st.column_config.NumberColumn("Preço médio (R$)", format="%.2f"),
+                    "menor": st.column_config.NumberColumn("Menor (R$)", format="%.2f"),
+                    "maior": st.column_config.NumberColumn("Maior (R$)", format="%.2f"),
+                    "ultimo": st.column_config.NumberColumn("Último (R$)", format="%.2f"),
+                    "cotacoes": st.column_config.NumberColumn("Preços anotados")})
+                if len(resumo) > 1:
+                    st.success(f"💡 Mais barato em média: **{resumo.iloc[0]['fornecedor']}** "
+                               f"({brl(float(resumo.iloc[0]['preco_medio']))} por unidade).")
     # ---------------------------------------------------------- NOTA FISCAL
     elif secao == "📄 Nota fiscal":
         guia, emitir, dados = st.tabs(["📘 Como funciona", "🧾 Notas dos pedidos", "🏢 Meus dados fiscais"])
