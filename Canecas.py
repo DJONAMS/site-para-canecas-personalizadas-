@@ -1015,6 +1015,9 @@ def render_vitrine(videos: list, colunas: int = 3):
             st.markdown(f"**{v.get('titulo', '')}**")
             if v.get("descricao"):
                 st.caption(v["descricao"])
+import altair as alt
+
+
 # ===============================================================
 # DECLARAÇÃO DE CONTEÚDO (para enviar sem nota fiscal)
 # ===============================================================
@@ -1061,7 +1064,6 @@ def gerar_backup_zip() -> bytes:
         if os.path.isdir(PASTA_VIDEOS):
             for nome in os.listdir(PASTA_VIDEOS):
                 z.write(os.path.join(PASTA_VIDEOS, nome), arcname=f"{PASTA_VIDEOS}/{nome}")
-        # Planilha fácil de abrir no Excel, com produtos e descrições
         prod = ler_csv(ARQ_PRODUTOS, COLUNAS_PRODUTOS).copy()
         prod["imagem"] = prod["imagem"].apply(lambda u: "(foto enviada)" if str(u).startswith("data:") else u)
         z.writestr("LEIA-ME/produtos_para_excel.csv", prod.to_csv(index=False, sep=";").encode("utf-8-sig"))
@@ -1111,64 +1113,220 @@ with _c_engrenagem:
 
 
 # ===============================================================
-# PAINEL DO ADMINISTRADOR (menu na lateral, uma seção por vez)
+# PAINEL ESCURO: estilo, cartões e gráficos
+# ===============================================================
+CSS_PAINEL = """
+<style>
+html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+    background: #0f172a !important; background-image: none !important; }
+[data-testid="stSidebar"] { background: #111827 !important; border-right: 1px solid #1f2937 !important; }
+h1, h2, h3, h4, h5, h6, p, span, label, li, div,
+[data-testid="stMarkdownContainer"], [data-testid="stWidgetLabel"],
+[data-testid="stMetricLabel"], [data-testid="stMetricValue"] { color: #e2e8f0 !important; }
+[data-testid="stCaptionContainer"] p { color: #94a3b8 !important; }
+[data-testid="stVerticalBlockBorderWrapper"], [data-testid="stExpander"], [data-testid="stMetric"] {
+    background: #1e293b !important; border: 1px solid #334155 !important; border-radius: 16px; }
+[data-testid="stMetric"] { border-left: 5px solid #a78bfa !important; }
+input, textarea, [data-baseweb="input"], [data-baseweb="base-input"], [data-baseweb="select"] > div {
+    background: #0f172a !important; color: #e2e8f0 !important; border-color: #334155 !important; }
+[data-baseweb="popover"] li, [data-baseweb="popover"] div, [data-baseweb="popover"] span {
+    color: #1a2233 !important; }
+.stButton > button, .stDownloadButton > button, .stLinkButton > a {
+    background: #1e293b !important; color: #c4b5fd !important; border: 1.5px solid #6366f1 !important; }
+.stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"], .stLinkButton > a[kind="primary"] {
+    background: linear-gradient(90deg, #8b5cf6, #22d3ee) !important; color: #ffffff !important; border: none !important; }
+[data-testid="stSidebar"] .stButton { margin-bottom: -10px; }
+[data-testid="stSidebar"] .stButton > button {
+    background: transparent !important; border: none !important; border-left: 4px solid transparent !important;
+    border-radius: 0 10px 10px 0 !important; color: #cbd5e1 !important; justify-content: flex-start !important; }
+[data-testid="stSidebar"] .stButton > button div { justify-content: flex-start !important; }
+[data-testid="stSidebar"] .stButton > button[kind="primary"] {
+    background: linear-gradient(90deg, rgba(139,92,246,.45), rgba(139,92,246,0)) !important;
+    border-left: 4px solid #a78bfa !important; color: #ffffff !important; }
+.adm-logo { font-size: 1.25rem; font-weight: 800; margin: 2px 0 10px; }
+.adm-grupo { font-size: .72rem; letter-spacing: .12em; color: #94a3b8 !important; margin: 16px 0 4px;
+    font-weight: 700; }
+.kpi { border-radius: 18px; padding: 16px 18px; min-height: 112px; box-shadow: 0 10px 24px rgba(0,0,0,.35); }
+.kpi-t { font-size: .85rem; color: #ffffff !important; opacity: .92; }
+.kpi-v { font-size: 1.7rem; font-weight: 800; color: #ffffff !important; margin-top: 8px; }
+.mini { display: flex; align-items: center; gap: 10px; background: #1e293b; border: 1px solid #334155;
+    border-radius: 14px; padding: 10px 12px; margin-bottom: 10px; }
+.mini-i { width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center;
+    justify-content: center; }
+.mini-t { flex: 1; font-weight: 600; }
+.mini-v { padding: 2px 12px; border-radius: 999px; font-weight: 800; color: #0f172a !important; }
+.selo { color: #991b1b !important; } .selo-ok { color: #166534 !important; } .selo-promo { color: #92400e !important; }
+</style>
+"""
+
+GRAD = {
+    "rosa": "linear-gradient(135deg, #f0abfc, #a78bfa)",
+    "agua": "linear-gradient(135deg, #5eead4, #22d3ee)",
+    "roxo": "linear-gradient(135deg, #818cf8, #6366f1)",
+    "azul": "linear-gradient(135deg, #38bdf8, #2563eb)",
+}
+
+
+def brl(v: float) -> str:
+    """Valor no formato brasileiro: R$ 1.234,56"""
+    return "R$ " + f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def cartao_kpi(titulo: str, valor: str, fundo: str) -> str:
+    return (f"<div class='kpi' style='background:{fundo}'><div class='kpi-t'>{html.escape(titulo)}</div>"
+            f"<div class='kpi-v'>{html.escape(valor)}</div></div>")
+
+
+def cartao_mini(icone: str, titulo: str, valor, cor: str) -> str:
+    return (f"<div class='mini'><span class='mini-i' style='background:{cor}'>{icone}</span>"
+            f"<span class='mini-t'>{html.escape(titulo)}</span>"
+            f"<span class='mini-v' style='background:{cor}'>{valor}</span></div>")
+
+
+def tema_escuro(graf):
+    return (graf.configure(background="transparent")
+            .configure_axis(labelColor="#cbd5e1", titleColor="#cbd5e1", gridColor="#334155",
+                            domainColor="#475569", tickColor="#475569")
+            .configure_view(strokeWidth=0)
+            .configure_legend(labelColor="#e2e8f0", titleColor="#e2e8f0"))
+
+
+def grafico(graf):
+    st.altair_chart(tema_escuro(graf), use_container_width=True, theme=None)
+
+
+def rosca(df: pd.DataFrame, campo: str, cores: list):
+    return alt.Chart(df).mark_arc(innerRadius=58, cornerRadius=4).encode(
+        theta=alt.Theta("qtd:Q"),
+        color=alt.Color(f"{campo}:N", title=None, scale=alt.Scale(range=cores),
+                        legend=alt.Legend(orient="bottom", columns=2)),
+        tooltip=[campo, "qtd"]).properties(height=250)
+
+
+# ===============================================================
+# PAINEL DO ADMINISTRADOR (menu fixo na barra lateral)
 # ===============================================================
 SECOES_ADMIN = {
-    "Visão geral": ["📊 Resumo"],
-    "Catálogo": ["📦 Produtos", "🖼️ Fotos"],
-    "Vendas": ["👥 Clientes", "🧾 Pedidos", "🚚 Rastreio", "📄 Nota fiscal", "📍 Frete"],
-    "Marketing": ["🏢 Apresentações", "🎬 Vitrine", "👁️ Interesse"],
-    "Configuração": ["🎨 Loja e redes", "💾 Backup"],
+    "VISÃO GERAL": ["📊 Resumo"],
+    "CATÁLOGO": ["📦 Produtos", "🖼️ Fotos"],
+    "VENDAS": ["👥 Clientes", "🧾 Pedidos", "🚚 Rastreio", "📄 Nota fiscal", "📍 Frete"],
+    "MARKETING": ["🏢 Apresentações", "🎬 Vitrine", "👁️ Interesse"],
+    "CONFIGURAÇÃO": ["🎨 Loja e redes", "💾 Backup"],
 }
 
 if st.session_state.admin:
+    st.markdown(CSS_PAINEL, unsafe_allow_html=True)
     with st.sidebar:
-        st.markdown(f"### ⚙️ {LOJA['nome_empresa']}")
+        st.markdown(f"<div class='adm-logo'>⚙️ {html.escape(LOJA['nome_empresa'])}</div>",
+                    unsafe_allow_html=True)
         st.caption("Painel do administrador")
-        grupo = st.radio("Área", list(SECOES_ADMIN.keys()), key="grupo_admin")
-        secao = st.radio("Seção", SECOES_ADMIN[grupo], key=f"secao_{grupo}")
+        for grupo, secoes in SECOES_ADMIN.items():
+            st.markdown(f"<div class='adm-grupo'>{grupo}</div>", unsafe_allow_html=True)
+            for s in secoes:
+                ativo = st.session_state.secao_admin == s
+                if st.button(s, key=f"menu_{s}", use_container_width=True,
+                             type="primary" if ativo else "secondary"):
+                    st.session_state.secao_admin = s
+                    st.rerun()
         st.divider()
         st.caption("Clique no ✖ no alto da página para voltar à loja.")
+    secao = st.session_state.secao_admin
     titulo_secao(secao)
 
-    # ---------------------------------------------------------- RESUMO
+    # ---------------------------------------------------------- RESUMO (dashboard)
     if secao == "📊 Resumo":
         clientes_r = ler_csv(ARQ_CLIENTES, COLUNAS_CLIENTES)
         pedidos_r = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
         pedidos_r["total_num"] = pd.to_numeric(pedidos_r["total"], errors="coerce").fillna(0.0)
+        pedidos_r["dt"] = pd.to_datetime(pedidos_r["data"], format="%d/%m/%Y %H:%M", errors="coerce")
         validos = pedidos_r[pedidos_r["status"] != "Cancelado"]
         faturamento = validos["total_num"].sum()
         recebido = validos[validos["pagamento"] == "Pago"]["total_num"].sum()
         ticket = faturamento / len(validos) if len(validos) else 0.0
-        c = st.columns(4)
-        c[0].metric("Pedidos", len(pedidos_r))
-        c[1].metric("Faturamento", f"R$ {faturamento:,.2f}")
-        c[2].metric("Já recebido", f"R$ {recebido:,.2f}")
-        c[3].metric("Ticket médio", f"R$ {ticket:,.2f}")
-        c = st.columns(4)
-        c[0].metric("Clientes", len(clientes_r))
-        c[1].metric("Pagamentos pendentes", int((pedidos_r["pagamento"] == "Pendente").sum()))
-        c[2].metric("Em produção", int((pedidos_r["status"] == "Em produção").sum()))
-        c[3].metric("Notas a emitir", int(((pedidos_r["nf_status"] == "Não emitida")
-                                          & (pedidos_r["status"] != "Cancelado")).sum()))
+
+        k = st.columns(4)
+        k[0].markdown(cartao_kpi("Faturamento", brl(faturamento), GRAD["rosa"]), unsafe_allow_html=True)
+        k[1].markdown(cartao_kpi("Já recebido", brl(recebido), GRAD["agua"]), unsafe_allow_html=True)
+        k[2].markdown(cartao_kpi("Ticket médio", brl(ticket), GRAD["roxo"]), unsafe_allow_html=True)
+        k[3].markdown(cartao_kpi("Pedidos", str(len(pedidos_r)), GRAD["azul"]), unsafe_allow_html=True)
+        st.write("")
+
+        if pedidos_r["dt"].notna().sum() == 0:
+            st.info("Os gráficos aparecem aqui assim que entrarem os primeiros pedidos.")
+        else:
+            base = pedidos_r.dropna(subset=["dt"]).copy()
+            base["mes"] = base["dt"].dt.strftime("%Y-%m")
+            esq, dir_ = st.columns([2.2, 1])
+            with esq, st.container(border=True):
+                st.markdown("**Pedidos feitos x entregues por mês**")
+                feitos = base.groupby("mes").size().rename("Pedidos feitos")
+                entregues = base[base["status"] == "Entregue"].groupby("mes").size().rename("Entregues")
+                linha = (pd.concat([feitos, entregues], axis=1).fillna(0).reset_index()
+                         .melt(id_vars="mes", var_name="tipo", value_name="qtd"))
+                grafico(alt.Chart(linha).mark_line(
+                    interpolate="monotone", strokeWidth=3, point=alt.OverlayMarkDef(size=70, filled=True)).encode(
+                    x=alt.X("mes:N", title=None, axis=alt.Axis(labelAngle=0)),
+                    y=alt.Y("qtd:Q", title=None),
+                    color=alt.Color("tipo:N", title=None, scale=alt.Scale(range=["#5eead4", "#f9a8d4"]),
+                                    legend=alt.Legend(orient="top")),
+                    tooltip=["mes", "tipo", "qtd"]).properties(height=270))
+            with dir_:
+                notas = int(((pedidos_r["nf_status"].isin(["", "Não emitida"]))
+                             & (pedidos_r["status"] != "Cancelado")).sum())
+                st.markdown(cartao_mini("💳", "Pagamentos pendentes",
+                                        int((pedidos_r["pagamento"] == "Pendente").sum()), "#f9a8d4"),
+                            unsafe_allow_html=True)
+                st.markdown(cartao_mini("🛠️", "Em produção",
+                                        int((pedidos_r["status"] == "Em produção").sum()), "#5eead4"),
+                            unsafe_allow_html=True)
+                st.markdown(cartao_mini("🚚", "Enviados",
+                                        int((pedidos_r["status"] == "Enviado").sum()), "#7dd3fc"),
+                            unsafe_allow_html=True)
+                st.markdown(cartao_mini("🧾", "Notas a emitir", notas, "#c4b5fd"), unsafe_allow_html=True)
+                st.markdown(cartao_mini("👥", "Clientes", len(clientes_r), "#fde68a"), unsafe_allow_html=True)
+
+            g1, g2, g3 = st.columns(3)
+            with g1, st.container(border=True):
+                st.markdown("**Pedidos por situação**")
+                por_status = pedidos_r["status"].value_counts().rename_axis("status").reset_index(name="qtd")
+                grafico(rosca(por_status, "status",
+                              ["#22d3ee", "#5eead4", "#38bdf8", "#818cf8", "#a78bfa", "#f0abfc", "#f9a8d4"]))
+            with g2, st.container(border=True):
+                st.markdown("**Clientes novos x que voltaram**")
+                q = pd.to_numeric(clientes_r["qtd_pedidos"], errors="coerce").fillna(0)
+                fidel = pd.DataFrame({"tipo": ["Clientes novos", "Voltaram a comprar"],
+                                      "qtd": [int((q <= 1).sum()), int((q > 1).sum())]})
+                grafico(rosca(fidel, "tipo", ["#f9a8d4", "#a78bfa"]))
+            with g3, st.container(border=True):
+                st.markdown("**Pedidos por dia da semana**")
+                dias = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
+                base["dia"] = base["dt"].dt.dayofweek.map(dict(enumerate(dias)))
+                barras = base["dia"].value_counts().reindex(dias, fill_value=0).rename_axis("dia").reset_index(name="qtd")
+                degrade = alt.Gradient(gradient="linear", x1=1, x2=1, y1=1, y2=0, stops=[
+                    alt.GradientStop(color="#0ea5e9", offset=0), alt.GradientStop(color="#5eead4", offset=1)])
+                grafico(alt.Chart(barras).mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6,
+                                                   color=degrade).encode(
+                    x=alt.X("dia:N", sort=dias, title=None, axis=alt.Axis(labelAngle=0)),
+                    y=alt.Y("qtd:Q", title=None), tooltip=["dia", "qtd"]).properties(height=250))
+
         e1, e2 = st.columns(2)
-        with e1:
+        with e1, st.container(border=True):
             st.markdown("**⚠️ Retornos de clientes para hoje**")
             hoje = datetime.now().strftime("%Y-%m-%d")
             retornos = clientes_r[(clientes_r["proximo_contato"] != "") & (clientes_r["proximo_contato"] <= hoje)]
             if len(retornos):
                 st.dataframe(retornos[["nome", "telefone", "proximo_contato"]], hide_index=True,
-                             use_container_width=True, height=220)
+                             use_container_width=True, height=200)
             else:
                 st.caption("Nenhum retorno pendente.")
-        with e2:
+        with e2, st.container(border=True):
             st.markdown("**🏆 Melhores clientes**")
             if len(clientes_r):
                 gasto = validos.groupby("telefone")["total_num"].sum().rename("gasto_total")
                 top = clientes_r.merge(gasto, on="telefone", how="left").fillna({"gasto_total": 0.0})
                 st.dataframe(top.sort_values("gasto_total", ascending=False).head(5)[
                     ["nome", "tipo", "qtd_pedidos", "gasto_total"]], hide_index=True,
-                    use_container_width=True, height=220)
+                    use_container_width=True, height=200)
             else:
                 st.caption("Ainda não há clientes.")
     # ---------------------------------------------------------- PRODUTOS
