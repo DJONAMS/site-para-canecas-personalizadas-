@@ -225,7 +225,8 @@ def gravar_loja(loja: dict):
 
 
 LOJA = carregar_loja()
-st.set_page_config(page_title=LOJA["nome_empresa"], page_icon="🏷️", layout="wide")
+st.set_page_config(page_title=LOJA["nome_empresa"], page_icon="🏷️", layout="wide",
+                   initial_sidebar_state="expanded")
 
 
 # ===============================================================
@@ -330,6 +331,9 @@ st.markdown(f"""
     [data-testid="stStatusWidget"], [class*="viewerBadge"], [data-testid="stAppDeployButton"]
     {{ display: none !important; }}
     [data-testid="stHeader"] {{ background-color: transparent !important; }}
+    /* Mantém visível a setinha que abre e fecha a barra lateral */
+    [data-testid="stSidebarCollapsedControl"], [data-testid="stExpandSidebarButton"],
+    [data-testid="stSidebarCollapseButton"] {{ display: flex !important; visibility: visible !important; }}
     .block-container {{ padding-top: 1.2rem !important; padding-bottom: 1rem !important; }}
     [data-testid="stSidebar"] {{ background-color: #ffffff !important; border-right: 1px solid #d9dfeb; }}
     h1, h2, h3, h4, h5, h6, p, span, label, li, div,
@@ -1118,38 +1122,38 @@ with _c_engrenagem:
 CSS_PAINEL = """
 <style>
 html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
-    background: #0f172a !important; background-image: none !important; }
-[data-testid="stSidebar"] { background: #111827 !important; border-right: 1px solid #1f2937 !important; }
+    background: #e9edf3 !important; background-image: none !important; }
+[data-testid="stSidebar"] { background: #ffffff !important; border-right: 1px solid #d1d5db !important; }
 h1, h2, h3, h4, h5, h6, p, span, label, li, div,
 [data-testid="stMarkdownContainer"], [data-testid="stWidgetLabel"],
-[data-testid="stMetricLabel"], [data-testid="stMetricValue"] { color: #e2e8f0 !important; }
-[data-testid="stCaptionContainer"] p { color: #94a3b8 !important; }
+[data-testid="stMetricLabel"], [data-testid="stMetricValue"] { color: #1f2937 !important; }
+[data-testid="stCaptionContainer"] p { color: #4b5563 !important; }
 [data-testid="stVerticalBlockBorderWrapper"], [data-testid="stExpander"], [data-testid="stMetric"] {
-    background: #1e293b !important; border: 1px solid #334155 !important; border-radius: 16px; }
+    background: #ffffff !important; border: 1px solid #d1d5db !important; border-radius: 16px; }
 [data-testid="stMetric"] { border-left: 5px solid #a78bfa !important; }
 input, textarea, [data-baseweb="input"], [data-baseweb="base-input"], [data-baseweb="select"] > div {
-    background: #0f172a !important; color: #e2e8f0 !important; border-color: #334155 !important; }
+    background: #ffffff !important; color: #1f2937 !important; border-color: #cbd5e1 !important; }
 [data-baseweb="popover"] li, [data-baseweb="popover"] div, [data-baseweb="popover"] span {
     color: #1a2233 !important; }
 .stButton > button, .stDownloadButton > button, .stLinkButton > a {
-    background: #1e293b !important; color: #c4b5fd !important; border: 1.5px solid #6366f1 !important; }
+    background: #ffffff !important; color: #6d28d9 !important; border: 1.5px solid #8b5cf6 !important; }
 .stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"], .stLinkButton > a[kind="primary"] {
     background: linear-gradient(90deg, #8b5cf6, #22d3ee) !important; color: #ffffff !important; border: none !important; }
 [data-testid="stSidebar"] .stButton { margin-bottom: -10px; }
 [data-testid="stSidebar"] .stButton > button {
     background: transparent !important; border: none !important; border-left: 4px solid transparent !important;
-    border-radius: 0 10px 10px 0 !important; color: #cbd5e1 !important; justify-content: flex-start !important; }
+    border-radius: 0 10px 10px 0 !important; color: #1f2937 !important; justify-content: flex-start !important; }
 [data-testid="stSidebar"] .stButton > button div { justify-content: flex-start !important; }
 [data-testid="stSidebar"] .stButton > button[kind="primary"] {
     background: linear-gradient(90deg, rgba(139,92,246,.45), rgba(139,92,246,0)) !important;
-    border-left: 4px solid #a78bfa !important; color: #ffffff !important; }
+    border-left: 4px solid #7c3aed !important; color: #4c1d95 !important; font-weight: 700 !important; }
 .adm-logo { font-size: 1.25rem; font-weight: 800; margin: 2px 0 10px; }
-.adm-grupo { font-size: .72rem; letter-spacing: .12em; color: #94a3b8 !important; margin: 16px 0 4px;
+.adm-grupo { font-size: .72rem; letter-spacing: .12em; color: #6b7280 !important; margin: 16px 0 4px;
     font-weight: 700; }
 .kpi { border-radius: 18px; padding: 16px 18px; min-height: 112px; box-shadow: 0 10px 24px rgba(0,0,0,.35); }
 .kpi-t { font-size: .85rem; color: #ffffff !important; opacity: .92; }
 .kpi-v { font-size: 1.7rem; font-weight: 800; color: #ffffff !important; margin-top: 8px; }
-.mini { display: flex; align-items: center; gap: 10px; background: #1e293b; border: 1px solid #334155;
+.mini { display: flex; align-items: center; gap: 10px; background: #ffffff; border: 1px solid #d1d5db;
     border-radius: 14px; padding: 10px 12px; margin-bottom: 10px; }
 .mini-i { width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center;
     justify-content: center; }
@@ -1185,10 +1189,10 @@ def cartao_mini(icone: str, titulo: str, valor, cor: str) -> str:
 
 def tema_escuro(graf):
     return (graf.configure(background="transparent")
-            .configure_axis(labelColor="#cbd5e1", titleColor="#cbd5e1", gridColor="#334155",
-                            domainColor="#475569", tickColor="#475569")
+            .configure_axis(labelColor="#374151", titleColor="#374151", gridColor="#e5e7eb",
+                            domainColor="#9ca3af", tickColor="#9ca3af")
             .configure_view(strokeWidth=0)
-            .configure_legend(labelColor="#e2e8f0", titleColor="#e2e8f0"))
+            .configure_legend(labelColor="#1f2937", titleColor="#1f2937"))
 
 
 def grafico(graf):
