@@ -1106,68 +1106,84 @@ def abrir_login_admin():
             st.error("Senha incorreta.")
 
 
-_c_espaco, _c_engrenagem = st.columns([30, 1])
-with _c_engrenagem:
-    if st.session_state.admin:
-        if st.button("✖", key="btn_sair_admin", help="Sair do modo administrador"):
-            st.session_state.admin = False
-            st.rerun()
-    elif st.button("⚙", key="btn_engrenagem", help=" "):
+if not st.session_state.admin:
+    _c_espaco, _c_engrenagem = st.columns([30, 1])
+    if _c_engrenagem.button("⚙", key="btn_engrenagem", help=" "):
         abrir_login_admin()
 
 
 # ===============================================================
-# PAINEL ESCURO: estilo, cartões e gráficos
+# PAINEL EMPRESARIAL: estilo claro, menu fixo à esquerda
 # ===============================================================
 CSS_PAINEL = """
 <style>
 html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
-    background: #e9edf3 !important; background-image: none !important; }
-[data-testid="stSidebar"] { background: #ffffff !important; border-right: 1px solid #d1d5db !important; }
-h1, h2, h3, h4, h5, h6, p, span, label, li, div,
-[data-testid="stMarkdownContainer"], [data-testid="stWidgetLabel"],
-[data-testid="stMetricLabel"], [data-testid="stMetricValue"] { color: #1f2937 !important; }
+    background: #eef2f7 !important; background-image: none !important; }
+[data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] { display: none !important; }
+.block-container { padding-left: 290px !important; padding-right: 28px !important; max-width: 100% !important; }
+h1, h2, h3, h4, h5, h6, p, span, label, li, div { color: #1f2937; }
 [data-testid="stCaptionContainer"] p { color: #4b5563 !important; }
-[data-testid="stVerticalBlockBorderWrapper"], [data-testid="stExpander"], [data-testid="stMetric"] {
-    background: #ffffff !important; border: 1px solid #d1d5db !important; border-radius: 16px; }
-[data-testid="stMetric"] { border-left: 5px solid #a78bfa !important; }
-input, textarea, [data-baseweb="input"], [data-baseweb="base-input"], [data-baseweb="select"] > div {
-    background: #ffffff !important; color: #1f2937 !important; border-color: #cbd5e1 !important; }
-[data-baseweb="popover"] li, [data-baseweb="popover"] div, [data-baseweb="popover"] span {
-    color: #1a2233 !important; }
+
+/* ---------- MENU FIXO À ESQUERDA ---------- */
+.st-key-menu_admin {
+    position: fixed; top: 0; left: 0; bottom: 0; width: 260px; z-index: 999990;
+    background: #ffffff; border-right: 1px solid #dbe1ea; padding: 18px 14px 40px;
+    overflow-y: auto; box-shadow: 4px 0 16px rgba(15, 23, 42, .08); }
+.st-key-menu_admin [data-testid="stVerticalBlock"] { gap: .3rem; }
+.st-key-menu_admin .stButton > button {
+    width: 100%; justify-content: flex-start !important; text-align: left;
+    background: #f8fafc !important; color: #1f2937 !important;
+    border: 1px solid #e2e8f0 !important; border-radius: 10px !important;
+    padding: 8px 12px !important; font-weight: 600 !important; box-shadow: none !important; }
+.st-key-menu_admin .stButton > button div { justify-content: flex-start !important; }
+.st-key-menu_admin .stButton > button p { color: inherit !important; font-size: .95rem; }
+.st-key-menu_admin .stButton > button:hover { background: #ede9fe !important; border-color: #8b5cf6 !important; }
+.st-key-menu_admin .stButton > button[kind="primary"] {
+    background: linear-gradient(90deg, #7c3aed, #06b6d4) !important; color: #ffffff !important; border: none !important; }
+.adm-logo { font-size: 1.2rem; font-weight: 800; color: #111827 !important; }
+.adm-sub { font-size: .8rem; color: #6b7280 !important; margin-bottom: 8px; }
+.adm-grupo { font-size: .7rem; letter-spacing: .12em; color: #7c3aed !important; font-weight: 800; margin: 12px 0 2px; }
+@media (max-width: 900px) {
+    .st-key-menu_admin { position: static; width: auto; box-shadow: none; border: 1px solid #dbe1ea; border-radius: 14px; }
+    .block-container { padding-left: 1rem !important; padding-right: 1rem !important; } }
+
+/* ---------- CONTEÚDO ---------- */
+.adm-topo { display: flex; justify-content: space-between; align-items: center; background: #ffffff;
+    border: 1px solid #dbe1ea; border-radius: 14px; padding: 12px 20px; margin-bottom: 14px;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, .05); }
+.adm-topo .t { font-size: 1.35rem; font-weight: 800; color: #111827 !important; }
+.adm-topo .d { font-size: .85rem; color: #6b7280 !important; }
+[data-testid="stVerticalBlockBorderWrapper"], [data-testid="stExpander"] {
+    background: #ffffff !important; border: 1px solid #dbe1ea !important; border-radius: 14px; }
+[data-testid="stMetric"] { background: #ffffff; border: 1px solid #dbe1ea; border-left: 5px solid #7c3aed;
+    border-radius: 12px; padding: 10px 14px; }
 .stButton > button, .stDownloadButton > button, .stLinkButton > a {
-    background: #ffffff !important; color: #6d28d9 !important; border: 1.5px solid #8b5cf6 !important; }
-.stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"], .stLinkButton > a[kind="primary"] {
-    background: linear-gradient(90deg, #8b5cf6, #22d3ee) !important; color: #ffffff !important; border: none !important; }
-[data-testid="stSidebar"] .stButton { margin-bottom: -10px; }
-[data-testid="stSidebar"] .stButton > button {
-    background: transparent !important; border: none !important; border-left: 4px solid transparent !important;
-    border-radius: 0 10px 10px 0 !important; color: #1f2937 !important; justify-content: flex-start !important; }
-[data-testid="stSidebar"] .stButton > button div { justify-content: flex-start !important; }
-[data-testid="stSidebar"] .stButton > button[kind="primary"] {
-    background: linear-gradient(90deg, rgba(139,92,246,.45), rgba(139,92,246,0)) !important;
-    border-left: 4px solid #7c3aed !important; color: #4c1d95 !important; font-weight: 700 !important; }
-.adm-logo { font-size: 1.25rem; font-weight: 800; margin: 2px 0 10px; }
-.adm-grupo { font-size: .72rem; letter-spacing: .12em; color: #6b7280 !important; margin: 16px 0 4px;
-    font-weight: 700; }
-.kpi { border-radius: 18px; padding: 16px 18px; min-height: 112px; box-shadow: 0 10px 24px rgba(0,0,0,.35); }
-.kpi-t { font-size: .85rem; color: #ffffff !important; opacity: .92; }
-.kpi-v { font-size: 1.7rem; font-weight: 800; color: #ffffff !important; margin-top: 8px; }
-.mini { display: flex; align-items: center; gap: 10px; background: #ffffff; border: 1px solid #d1d5db;
-    border-radius: 14px; padding: 10px 12px; margin-bottom: 10px; }
-.mini-i { width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center;
-    justify-content: center; }
+    background: #ffffff !important; color: #5b21b6 !important; border: 1.5px solid #8b5cf6 !important;
+    border-radius: 10px !important; font-weight: 700 !important; box-shadow: 0 1px 3px rgba(0, 0, 0, .08); }
+.stButton > button:hover, .stDownloadButton > button:hover, .stLinkButton > a:hover { background: #f5f3ff !important; }
+.stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"],
+.stLinkButton > a[kind="primary"], [data-testid="stFormSubmitButton"] button[kind="primaryFormSubmit"] {
+    background: linear-gradient(90deg, #7c3aed, #06b6d4) !important; color: #ffffff !important; border: none !important; }
+.stButton > button p, .stDownloadButton > button p { color: inherit !important; }
+button[data-baseweb="tab"] { background: #ffffff; border: 1px solid #dbe1ea !important; border-radius: 10px 10px 0 0;
+    padding: 6px 14px !important; margin-right: 4px; }
+button[data-baseweb="tab"][aria-selected="true"] { background: #ede9fe; }
+.kpi { border-radius: 16px; padding: 16px 18px; min-height: 108px; box-shadow: 0 8px 20px rgba(15, 23, 42, .12); }
+.kpi-t { font-size: .85rem; color: #ffffff !important; font-weight: 600; }
+.kpi-v { font-size: 1.65rem; font-weight: 800; color: #ffffff !important; margin-top: 8px; }
+.mini { display: flex; align-items: center; gap: 10px; background: #ffffff; border: 1px solid #dbe1ea;
+    border-radius: 12px; padding: 9px 12px; margin-bottom: 8px; }
+.mini-i { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
 .mini-t { flex: 1; font-weight: 600; }
-.mini-v { padding: 2px 12px; border-radius: 999px; font-weight: 800; color: #0f172a !important; }
-.selo { color: #991b1b !important; } .selo-ok { color: #166534 !important; } .selo-promo { color: #92400e !important; }
+.mini-v { padding: 2px 12px; border-radius: 999px; font-weight: 800; color: #1f2937 !important; }
 </style>
 """
 
 GRAD = {
-    "rosa": "linear-gradient(135deg, #f0abfc, #a78bfa)",
-    "agua": "linear-gradient(135deg, #5eead4, #22d3ee)",
-    "roxo": "linear-gradient(135deg, #818cf8, #6366f1)",
-    "azul": "linear-gradient(135deg, #38bdf8, #2563eb)",
+    "rosa": "linear-gradient(135deg, #ec4899, #8b5cf6)",
+    "agua": "linear-gradient(135deg, #14b8a6, #06b6d4)",
+    "roxo": "linear-gradient(135deg, #6366f1, #4338ca)",
+    "azul": "linear-gradient(135deg, #0ea5e9, #2563eb)",
 }
 
 
@@ -1187,7 +1203,7 @@ def cartao_mini(icone: str, titulo: str, valor, cor: str) -> str:
             f"<span class='mini-v' style='background:{cor}'>{valor}</span></div>")
 
 
-def tema_escuro(graf):
+def tema_grafico(graf):
     return (graf.configure(background="transparent")
             .configure_axis(labelColor="#374151", titleColor="#374151", gridColor="#e5e7eb",
                             domainColor="#9ca3af", tickColor="#9ca3af")
@@ -1196,7 +1212,7 @@ def tema_escuro(graf):
 
 
 def grafico(graf):
-    st.altair_chart(tema_escuro(graf), use_container_width=True, theme=None)
+    st.altair_chart(tema_grafico(graf), use_container_width=True, theme=None)
 
 
 def rosca(df: pd.DataFrame, campo: str, cores: list):
@@ -1204,11 +1220,15 @@ def rosca(df: pd.DataFrame, campo: str, cores: list):
         theta=alt.Theta("qtd:Q"),
         color=alt.Color(f"{campo}:N", title=None, scale=alt.Scale(range=cores),
                         legend=alt.Legend(orient="bottom", columns=2)),
-        tooltip=[campo, "qtd"]).properties(height=250)
+        tooltip=[campo, "qtd"]).properties(height=240)
+
+
+def ir_secao(destino: str):
+    st.session_state.secao_admin = destino
 
 
 # ===============================================================
-# PAINEL DO ADMINISTRADOR (menu fixo na barra lateral)
+# PAINEL DO ADMINISTRADOR
 # ===============================================================
 SECOES_ADMIN = {
     "VISÃO GERAL": ["📊 Resumo"],
@@ -1220,22 +1240,24 @@ SECOES_ADMIN = {
 
 if st.session_state.admin:
     st.markdown(CSS_PAINEL, unsafe_allow_html=True)
-    with st.sidebar:
-        st.markdown(f"<div class='adm-logo'>⚙️ {html.escape(LOJA['nome_empresa'])}</div>",
-                    unsafe_allow_html=True)
-        st.caption("Painel do administrador")
+
+    # ----- Menu fixo à esquerda, com todos os comandos -----
+    with st.container(key="menu_admin"):
+        st.markdown(f"<div class='adm-logo'>⚙️ {html.escape(LOJA['nome_empresa'])}</div>"
+                    "<div class='adm-sub'>Painel administrativo</div>", unsafe_allow_html=True)
         for grupo, secoes in SECOES_ADMIN.items():
             st.markdown(f"<div class='adm-grupo'>{grupo}</div>", unsafe_allow_html=True)
             for s in secoes:
-                ativo = st.session_state.secao_admin == s
-                if st.button(s, key=f"menu_{s}", use_container_width=True,
-                             type="primary" if ativo else "secondary"):
-                    st.session_state.secao_admin = s
-                    st.rerun()
-        st.divider()
-        st.caption("Clique no ✖ no alto da página para voltar à loja.")
+                st.button(s, key=f"menu_{s}", use_container_width=True, on_click=ir_secao, args=(s,),
+                          type="primary" if st.session_state.secao_admin == s else "secondary")
+        st.markdown("<div class='adm-grupo'>SAIR</div>", unsafe_allow_html=True)
+        if st.button("🚪 Voltar para a loja", key="menu_sair", use_container_width=True):
+            st.session_state.admin = False
+            st.rerun()
+
     secao = st.session_state.secao_admin
-    titulo_secao(secao)
+    st.markdown(f"<div class='adm-topo'><span class='t'>{html.escape(secao)}</span>"
+                f"<span class='d'>{datetime.now().strftime('%d/%m/%Y')}</span></div>", unsafe_allow_html=True)
 
     # ---------------------------------------------------------- RESUMO (dashboard)
     if secao == "📊 Resumo":
@@ -1247,6 +1269,15 @@ if st.session_state.admin:
         faturamento = validos["total_num"].sum()
         recebido = validos[validos["pagamento"] == "Pago"]["total_num"].sum()
         ticket = faturamento / len(validos) if len(validos) else 0.0
+
+        # Atalhos rápidos (botões clicáveis)
+        atalhos = [("➕ Novo produto", "📦 Produtos"), ("🧾 Ver pedidos", "🧾 Pedidos"),
+                   ("🚚 Rastrear envios", "🚚 Rastreio"), ("🏢 Nova apresentação", "🏢 Apresentações"),
+                   ("💾 Fazer backup", "💾 Backup")]
+        for col, (rotulo, destino) in zip(st.columns(len(atalhos)), atalhos):
+            col.button(rotulo, key=f"atalho_{destino}", use_container_width=True, type="primary",
+                       on_click=ir_secao, args=(destino,))
+        st.write("")
 
         k = st.columns(4)
         k[0].markdown(cartao_kpi("Faturamento", brl(faturamento), GRAD["rosa"]), unsafe_allow_html=True)
@@ -1271,22 +1302,22 @@ if st.session_state.admin:
                     interpolate="monotone", strokeWidth=3, point=alt.OverlayMarkDef(size=70, filled=True)).encode(
                     x=alt.X("mes:N", title=None, axis=alt.Axis(labelAngle=0)),
                     y=alt.Y("qtd:Q", title=None),
-                    color=alt.Color("tipo:N", title=None, scale=alt.Scale(range=["#5eead4", "#f9a8d4"]),
+                    color=alt.Color("tipo:N", title=None, scale=alt.Scale(range=["#06b6d4", "#ec4899"]),
                                     legend=alt.Legend(orient="top")),
-                    tooltip=["mes", "tipo", "qtd"]).properties(height=270))
+                    tooltip=["mes", "tipo", "qtd"]).properties(height=260))
             with dir_:
                 notas = int(((pedidos_r["nf_status"].isin(["", "Não emitida"]))
                              & (pedidos_r["status"] != "Cancelado")).sum())
                 st.markdown(cartao_mini("💳", "Pagamentos pendentes",
-                                        int((pedidos_r["pagamento"] == "Pendente").sum()), "#f9a8d4"),
+                                        int((pedidos_r["pagamento"] == "Pendente").sum()), "#fbcfe8"),
                             unsafe_allow_html=True)
                 st.markdown(cartao_mini("🛠️", "Em produção",
-                                        int((pedidos_r["status"] == "Em produção").sum()), "#5eead4"),
+                                        int((pedidos_r["status"] == "Em produção").sum()), "#99f6e4"),
                             unsafe_allow_html=True)
                 st.markdown(cartao_mini("🚚", "Enviados",
-                                        int((pedidos_r["status"] == "Enviado").sum()), "#7dd3fc"),
+                                        int((pedidos_r["status"] == "Enviado").sum()), "#bae6fd"),
                             unsafe_allow_html=True)
-                st.markdown(cartao_mini("🧾", "Notas a emitir", notas, "#c4b5fd"), unsafe_allow_html=True)
+                st.markdown(cartao_mini("🧾", "Notas a emitir", notas, "#ddd6fe"), unsafe_allow_html=True)
                 st.markdown(cartao_mini("👥", "Clientes", len(clientes_r), "#fde68a"), unsafe_allow_html=True)
 
             g1, g2, g3 = st.columns(3)
@@ -1294,24 +1325,24 @@ if st.session_state.admin:
                 st.markdown("**Pedidos por situação**")
                 por_status = pedidos_r["status"].value_counts().rename_axis("status").reset_index(name="qtd")
                 grafico(rosca(por_status, "status",
-                              ["#22d3ee", "#5eead4", "#38bdf8", "#818cf8", "#a78bfa", "#f0abfc", "#f9a8d4"]))
+                              ["#06b6d4", "#14b8a6", "#0ea5e9", "#6366f1", "#8b5cf6", "#d946ef", "#ec4899"]))
             with g2, st.container(border=True):
                 st.markdown("**Clientes novos x que voltaram**")
                 q = pd.to_numeric(clientes_r["qtd_pedidos"], errors="coerce").fillna(0)
                 fidel = pd.DataFrame({"tipo": ["Clientes novos", "Voltaram a comprar"],
                                       "qtd": [int((q <= 1).sum()), int((q > 1).sum())]})
-                grafico(rosca(fidel, "tipo", ["#f9a8d4", "#a78bfa"]))
+                grafico(rosca(fidel, "tipo", ["#ec4899", "#8b5cf6"]))
             with g3, st.container(border=True):
                 st.markdown("**Pedidos por dia da semana**")
                 dias = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
                 base["dia"] = base["dt"].dt.dayofweek.map(dict(enumerate(dias)))
                 barras = base["dia"].value_counts().reindex(dias, fill_value=0).rename_axis("dia").reset_index(name="qtd")
                 degrade = alt.Gradient(gradient="linear", x1=1, x2=1, y1=1, y2=0, stops=[
-                    alt.GradientStop(color="#0ea5e9", offset=0), alt.GradientStop(color="#5eead4", offset=1)])
+                    alt.GradientStop(color="#2563eb", offset=0), alt.GradientStop(color="#06b6d4", offset=1)])
                 grafico(alt.Chart(barras).mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6,
                                                    color=degrade).encode(
                     x=alt.X("dia:N", sort=dias, title=None, axis=alt.Axis(labelAngle=0)),
-                    y=alt.Y("qtd:Q", title=None), tooltip=["dia", "qtd"]).properties(height=250))
+                    y=alt.Y("qtd:Q", title=None), tooltip=["dia", "qtd"]).properties(height=240))
 
         e1, e2 = st.columns(2)
         with e1, st.container(border=True):
@@ -1323,6 +1354,7 @@ if st.session_state.admin:
                              use_container_width=True, height=200)
             else:
                 st.caption("Nenhum retorno pendente.")
+            st.button("👥 Abrir clientes", key="res_cli", on_click=ir_secao, args=("👥 Clientes",))
         with e2, st.container(border=True):
             st.markdown("**🏆 Melhores clientes**")
             if len(clientes_r):
@@ -1333,6 +1365,7 @@ if st.session_state.admin:
                     use_container_width=True, height=200)
             else:
                 st.caption("Ainda não há clientes.")
+            st.button("👁️ Ver interesse dos visitantes", key="res_int", on_click=ir_secao, args=("👁️ Interesse",))
     # ---------------------------------------------------------- PRODUTOS
     elif secao == "📦 Produtos":
         n1, n2 = st.columns(2)
