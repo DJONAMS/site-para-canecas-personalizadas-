@@ -618,11 +618,20 @@ def salvar_artes(id_pedido: str) -> str:
             continue
         caminho = ""
         if p.get("arte"):
-            cab, b64 = p["arte"].split(",", 1)
+            if p["arte"].startswith("http"):
+                try:
+                    with urllib.request.urlopen(p["arte"], timeout=8) as r:
+                        dados = r.read()
+                except Exception:
+                    dados = b""
+                cab = "jpg"
+            else:
+                cab, b64 = p["arte"].split(",", 1)
+                dados = base64.b64decode(b64)
             ext = "png" if "png" in cab else "webp" if "webp" in cab else "jpg"
             caminho = os.path.join(PASTA_ARTES, f"{id_pedido}_{n}.{ext}")
             with open(caminho, "wb") as f:
-                f.write(base64.b64decode(b64))
+                f.write(dados)
         lista.append({"item": item["nome"], "quantidade": item["quantidade"], "arquivo": caminho,
                       "texto": p.get("texto", ""), "fonte": p.get("fonte", ""), "cor_texto": p.get("cor_texto", ""),
                       "obs": p.get("obs", ""), "escala": p.get("escala", 100), "arte_nome": p.get("arte_nome", "")})
@@ -744,7 +753,7 @@ def coletar_perso(item: dict) -> dict:
              "escala": st.session_state.get(f"pesc_{k}", 100), "arte": ""}
     gal = st.session_state.get(f"pgal_{k}")
     if gal:
-        escolhida = next((a for a in ARTES_PRONTAS if a["id"] == gal), None)
+        escolhida = next((a for a in lista_artes() if a["id"] == gal), None)
         if escolhida:
             perso["arte"] = escolhida["imagem"]
             perso["arte_nome"] = "Arte pronta: " + escolhida["nome"]
@@ -828,7 +837,8 @@ def finalizar_pedido():
     for i in st.session_state.carrinho:
         extra = f" (+{i['unidades_gratis']} brinde)" if i["unidades_gratis"] > 0 else ""
         if i.get("perso"):
-            extra += " [personalizado: " + (i["perso"].get("texto") or "arte enviada") + "]"
+            extra += " [personalizado: " + " | ".join(x for x in [i["perso"].get("arte_nome", ""),
+                                                              i["perso"].get("texto", "")] if x) + "]"
         linhas.append(f"- {i['quantidade']}x {i['nome']}{extra} (R$ {i['subtotal']:.2f})")
 
     frete = st.session_state.get("frete")
@@ -907,10 +917,15 @@ def abrir_produto(item: dict):
         modo = st.radio("Ver como", ["🔍 Foto ampliada", "🔄 Modelo 3D"], horizontal=True,
                         key=f"modo_ver_{item['id']}", label_visibility="collapsed")
         if modo.startswith("🔍"):
-            foto_com_lupa(item)
+            mockup = mockup_perso(item)
+            if mockup:
+                st.markdown(mockup, unsafe_allow_html=True)
+            else:
+                foto_com_lupa(item)
             st.caption("Passe o mouse sobre a foto para ver os detalhes.")
         else:
             renderizar_visualizador_3d(item, height=430)
+        grade_artes(item)
     with dir_:
         st.markdown(f"## {item['nome']}")
         st.caption(f"{item['categoria']}" + (f" · código {item['sku']}" if item["sku"] else ""))
@@ -936,7 +951,7 @@ def abrir_produto(item: dict):
             st.radio("Tamanho / tipo", item["variacoes"], key=f"var_{item['id']}", horizontal=True)
         st.markdown("**🎨 Personalize do seu jeito**")
         k = item["id"]
-        galeria = [a for a in ARTES_PRONTAS if not a.get("categorias") or item["categoria"] in a["categorias"]]
+        galeria = []  # a grade de artes agora fica embaixo da foto grande
         if galeria:
             st.caption("Escolha uma das nossas artes prontas:")
             for ini in range(0, len(galeria), 4):
@@ -968,7 +983,7 @@ def abrir_produto(item: dict):
         elif st.session_state.get(f"pgal_{k}"):
             src = next((a["imagem"] for a in ARTES_PRONTAS if a["id"] == st.session_state[f"pgal_{k}"]), "")
         txt = st.session_state.get(f"ptxt_{k}", "")
-        if src or txt:
+        if False:  # o exemplo agora aparece na foto grande
             esc = st.session_state.get(f"pesc_{k}", 100)
             forma = "3/4" if "Camis" in item["categoria"] else "1/1" if "Almof" in item["categoria"] else "2/1"
             foto = (f"<img src='{src}' style='max-width:{esc}%;max-height:{int(esc * (0.7 if txt else 1))}%;"
@@ -1045,6 +1060,83 @@ APRESENTACOES = ler_json(ARQ_APRESENTACOES, [])
 VITRINE = ler_json(ARQ_VITRINE, [])
 ARTES_PRONTAS = ler_json(ARQ_ARTES_PRONTAS, [])
 os.makedirs(PASTA_VIDEOS, exist_ok=True)
+# ===============================================================
+# GRADE DE ARTES PRONTAS (embaixo da foto grande do produto)
+# ===============================================================
+ARTES_EXEMPLO = [
+    {"id": f"ex{n}", "nome": nome, "categorias": [], "exemplo": True,
+     "imagem": f"https://picsum.photos/seed/{semente}/400/400"}
+    for n, (nome, semente) in enumerate([
+        ("Paisagem", "montanha"), ("Praia", "praia"), ("Flores", "flores"), ("Cidade", "cidade"),
+        ("Café", "cafe"), ("Pôr do sol", "sol"), ("Animais", "animal"), ("Abstrata", "abstrata"),
+        ("Floresta", "floresta"), ("Montanha", "neve"), ("Noite", "noite"), ("Mar", "mar"),
+        ("Vintage", "vintage"), ("Esporte", "esporte"), ("Música", "musica"), ("Viagem", "viagem"),
+        ("Campo", "campo"), ("Céu", "ceu"), ("Colorida", "cores"), ("Minimalista", "minimal")], start=1)
+]
+
+
+def lista_artes(categoria: str = "") -> list:
+    """Suas artes da Galeria; enquanto não houver nenhuma, mostra exemplos da internet."""
+    base = ARTES_PRONTAS if ARTES_PRONTAS else ARTES_EXEMPLO
+    return [a for a in base if not categoria or not a.get("categorias") or categoria in a["categorias"]]
+
+
+def escolher_arte(chave: str, arte_id):
+    st.session_state[chave] = arte_id
+
+
+def grade_artes(item: dict):
+    k = item["id"]
+    artes = lista_artes(item["categoria"])
+    st.markdown("**🎨 Escolha uma arte pronta**")
+    if not ARTES_PRONTAS:
+        st.caption("Exemplos provisórios. Cadastre as suas em Galeria de artes, no painel.")
+    escolhida = st.session_state.get(f"pgal_{k}")
+    with st.container(height=330, border=True):
+        for ini in range(0, len(artes), 5):
+            for c, a in zip(st.columns(5), artes[ini:ini + 5]):
+                with c:
+                    marcada = escolhida == a["id"]
+                    borda = "3px solid #7c3aed" if marcada else "1px solid #d1d5db"
+                    st.markdown(f"<img src='{html.escape(a['imagem'], quote=True)}' style='width:100%;"
+                                f"aspect-ratio:1/1;object-fit:cover;border-radius:8px;border:{borda};'>",
+                                unsafe_allow_html=True)
+                    st.button(("✅ " if marcada else "") + a["nome"][:12], key=f"gal_{k}_{a['id']}",
+                              use_container_width=True, type="primary" if marcada else "secondary",
+                              on_click=escolher_arte, args=(f"pgal_{k}", a["id"]))
+    if escolhida:
+        nome_sel = next((a["nome"] for a in artes if a["id"] == escolhida), "")
+        st.success(f"✅ Arte escolhida: {nome_sel}. Ela vai junto com o pedido.")
+        st.button("✖ Tirar a arte escolhida", key=f"galx_{k}", on_click=escolher_arte, args=(f"pgal_{k}", None))
+
+
+def mockup_perso(item: dict) -> str:
+    """Exemplo da peça com a arte escolhida ou a foto enviada, mostrado no lugar da foto grande."""
+    k = item["id"]
+    src = ""
+    arq = st.session_state.get(f"arte_{k}")
+    if arq is not None and arq.size <= 3 * 1024 * 1024:
+        src = f"data:{arq.type or 'image/png'};base64," + base64.b64encode(arq.getvalue()).decode()
+    elif st.session_state.get(f"pgal_{k}"):
+        src = next((a["imagem"] for a in lista_artes() if a["id"] == st.session_state[f"pgal_{k}"]), "")
+    txt = st.session_state.get(f"ptxt_{k}", "")
+    if not (src or txt):
+        return ""
+    esc = st.session_state.get(f"pesc_{k}", 100)
+    cat = item["categoria"]
+    forma = "3/4" if "Camis" in cat else "1/1" if ("Almof" in cat or "Chav" in cat) else "4/3"
+    raio = "50%" if "Chav" in cat else "18px 18px 40px 40px"
+    fonte = CSS_FONTES.get(st.session_state.get(f"pfonte_{k}", "Padrão"), "Arial")
+    cor_t = st.session_state.get(f"pcor_{k}", "#000000")
+    foto = (f"<img src='{html.escape(src, quote=True)}' style='max-width:{esc}%;"
+            f"max-height:{int(esc * (0.72 if txt else 1))}%;object-fit:contain;'>" if src else "")
+    return ("<div style='width:100%;height:430px;background:#e3eafc;border-radius:12px;display:flex;"
+            "align-items:center;justify-content:center;'>"
+            f"<div style='width:78%;aspect-ratio:{forma};max-height:400px;background:#fff;border:2px solid #cbd5e1;"
+            f"border-radius:{raio};display:flex;flex-direction:column;align-items:center;justify-content:center;"
+            "overflow:hidden;box-shadow:inset -24px 0 30px rgba(0,0,0,.10), 0 10px 24px rgba(0,0,0,.15);'>"
+            f"{foto}<div style='font-family:{fonte};color:{cor_t};font-size:1.6rem;font-weight:700;"
+            f"text-align:center;padding:4px;'>{html.escape(txt)}</div></div></div>")
 # ===============================================================
 # APRESENTAÇÃO PARA EMPRESAS E VITRINE DE VÍDEOS (usadas no painel e na loja)
 # ===============================================================
