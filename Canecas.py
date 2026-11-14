@@ -111,6 +111,8 @@ COLUNAS_PEDIDOS = [
     "previsao_entrega", "obs_internas", "tipo_cliente",
     "cpf_cnpj", "endereco_entrega",
     "nf_status", "nf_numero", "nf_chave", "nf_link",
+    "ent_rua", "ent_numero", "ent_complemento", "ent_bairro",
+    "ent_cidade", "ent_uf", "ent_cep", "ent_peso",
 ]
 COLUNAS_CLIQUES = ["data", "evento", "categoria", "produto"]
 
@@ -607,6 +609,10 @@ def registrar_pedido(nome: str, telefone: str, email: str, itens_txt: str, total
         "previsao_entrega": "", "obs_internas": "", "tipo_cliente": tipo,
         "cpf_cnpj": empresa.get("cnpj", ""), "endereco_entrega": endereco,
         "nf_status": "Não emitida", "nf_numero": "", "nf_chave": "", "nf_link": "",
+        "ent_rua": frete.get("rua", ""), "ent_numero": st.session_state.get("cli_numero", "").strip(),
+        "ent_complemento": st.session_state.get("cli_comp", "").strip(), "ent_bairro": frete.get("bairro", ""),
+        "ent_cidade": frete.get("cidade", ""), "ent_uf": frete.get("uf", ""), "ent_cep": frete.get("cep", ""),
+        "ent_peso": "",
     }])
     gravar_csv(ARQ_PEDIDOS, pd.concat([pedidos, novo], ignore_index=True))
 
@@ -1233,7 +1239,7 @@ def ir_secao(destino: str):
 SECOES_ADMIN = {
     "VISÃO GERAL": ["📊 Resumo"],
     "CATÁLOGO": ["📦 Produtos", "🖼️ Fotos"],
-    "VENDAS": ["👥 Clientes", "🧾 Pedidos", "🚚 Rastreio", "📄 Nota fiscal", "📍 Frete"],
+    "VENDAS": ["👥 Clientes", "🧾 Pedidos", "🚚 Rastreio", "🏷️ Etiquetas", "📄 Nota fiscal", "📍 Frete"],
     "MARKETING": ["🏢 Apresentações", "🎬 Vitrine", "👁️ Interesse"],
     "CONFIGURAÇÃO": ["🎨 Loja e redes", "💾 Backup"],
 }
@@ -1764,6 +1770,178 @@ if st.session_state.admin:
                 a2.link_button("✉️ Avisar por e-mail",
                                f"mailto:{ped['email']}?subject={assunto}&body={urllib.parse.quote(msg)}",
                                use_container_width=True)
+    # ---------------------------------------------------------- ETIQUETAS DE ENVIO (Correios)
+    elif secao == "🏷️ Etiquetas":
+        def html_etiquetas(lista, imprimir: bool = True) -> str:
+            """Etiquetas de 9 x 13 cm, 4 por folha A4, com destinatário e remetente."""
+            e = lambda v: html.escape(str(v or ""))
+            rem = (f"<b>{e(LOJA['fiscal_razao'] or LOJA['nome_empresa'])}</b><br>{e(LOJA['fiscal_endereco'])}<br>"
+                   f"{e(LOJA['fiscal_cidade_uf'])} - CEP {e(LOJA['fiscal_cep'])}")
+            cartoes = ""
+            for p in lista:
+                cep = "".join(c for c in str(p["ent_cep"]) if c.isdigit())
+                cep_fmt = f"{cep[:5]}-{cep[5:]}" if len(cep) == 8 else e(p["ent_cep"])
+                itens = [i.strip("- ").strip() for i in str(p["itens"]).split("|")[0].split(";") if i.strip()]
+                lista_itens = "".join(f"<li>{e(i)}</li>" for i in itens) or "<li>(sem itens)</li>"
+                end1 = f"{e(p['ent_rua'])}, {e(p['ent_numero'] or 'S/N')}"
+                if p["ent_complemento"]:
+                    end1 += f" - {e(p['ent_complemento'])}"
+                cartoes += f"""<div class='etq'>
+<div class='topo'><span>{e(LOJA['nome_empresa'])}</span><span>Pedido {e(p['id_pedido'])}</span></div>
+<div class='rot'>DESTINATÁRIO</div>
+<div class='dest'><b>{e(p['nome'])}</b><br>{end1}<br>{e(p['ent_bairro'])}<br>{e(p['ent_cidade'])} / {e(p['ent_uf'])}</div>
+<div class='cep'>CEP {cep_fmt}</div>
+<div class='info'>Tel.: {e(p['telefone'])} &nbsp;&nbsp; Peso: {e(p['ent_peso']) or '______'} kg</div>
+<div class='rot'>CONTEÚDO DO PEDIDO</div><ul class='itens'>{lista_itens}</ul>
+<div class='info'><b>Total do pedido:</b> R$ {e(p['total'])}</div>
+<div class='rot'>REMETENTE</div><div class='rem'>{rem}</div></div>"""
+            auto = " onload='window.print()'" if imprimir else ""
+            return f"""<html><head><meta charset='utf-8'><title>Etiquetas</title><style>
+@page {{ size: A4; margin: 8mm; }}
+body {{ font-family: Arial, sans-serif; margin: 0; color: #000; }}
+.grade {{ display: flex; flex-wrap: wrap; gap: 5mm; }}
+.etq {{ width: 92mm; min-height: 130mm; border: 1.5px dashed #000; padding: 6mm; box-sizing: border-box;
+        page-break-inside: avoid; display: flex; flex-direction: column; gap: 3mm; background: #fff; }}
+.topo {{ display: flex; justify-content: space-between; font-size: 11px; border-bottom: 1px solid #000; padding-bottom: 2mm; }}
+.rot {{ font-size: 11px; font-weight: bold; letter-spacing: 1px; background: #000; color: #fff; padding: 1mm 2mm; }}
+.dest {{ font-size: 16px; line-height: 1.35; }}
+.cep {{ font-size: 26px; font-weight: bold; border: 2px solid #000; text-align: center; padding: 2mm; }}
+.info {{ font-size: 12px; }}
+.rem {{ font-size: 12px; line-height: 1.3; }}
+.itens {{ font-size: 12px; line-height: 1.35; margin: 0; padding-left: 5mm; }}
+</style></head><body{auto}><div class='grade'>{cartoes}</div></body></html>"""
+
+        pedidos = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
+        def corpo_html(h: str) -> str:
+            return h.split("<body", 1)[1].split(">", 1)[1].rsplit("</body>", 1)[0]
+
+        def pacote_impressao(lista, com_etq: bool, com_decl: bool) -> str:
+            """Junta etiqueta e/ou declaração de conteúdo num arquivo só para imprimir."""
+            if not (com_etq or com_decl):
+                return "<html><body><p>Marque Etiqueta ou Declaração para imprimir.</p></body></html>"
+            estilos, partes = "", []
+            if com_etq:
+                h = html_etiquetas(lista, imprimir=False)
+                estilos += h.split("<style>", 1)[1].split("</style>", 1)[0]
+                partes.append(corpo_html(h))
+            if com_decl:
+                estilos += (".decl{page-break-before:always;font-family:Arial;padding:6mm}"
+                            ".decl table{width:100%;border-collapse:collapse}"
+                            ".decl td,.decl th{border:1px solid #333;padding:6px;font-size:13px}"
+                            ".decl h2{text-align:center}")
+                for p in lista:
+                    partes.append("<div class='decl'>" + corpo_html(html_declaracao(p)) + "</div>")
+            return ("<html><head><meta charset='utf-8'><title>Impressão</title>"
+                    f"<style>{estilos}</style></head><body onload='window.print()'>{''.join(partes)}</body></html>")
+
+        st.caption("Quando o cliente finaliza o pedido, o endereço dele já aparece aqui sozinho. "
+                   "Confira, complete se faltar algo e imprima a etiqueta para colar no pacote.")
+        if not LOJA.get("fiscal_endereco"):
+            st.warning("Preencha seu endereço em Nota fiscal > Meus dados fiscais. Ele sai como remetente.")
+        if pedidos.empty:
+            st.info("Ainda não há pedidos.")
+        else:
+            prontos = pedidos[pedidos["status"].isin(["Novo", "Pago", "Em produção", "Enviado"])]
+            so_prontos = st.toggle("Mostrar só pedidos para enviar", value=True, key="etq_prontos")
+            lista = (prontos if so_prontos and len(prontos) else pedidos).iloc[::-1]
+            opcoes = [f"{p['id_pedido']} · {p['nome']} · {p['status']}" for _, p in lista.iterrows()]
+            id_sel = st.selectbox("Pedido (código e nome do cliente)", opcoes, key="etq_pedido").split(" · ")[0]
+            ped = pedidos[pedidos["id_pedido"] == id_sel].iloc[0]
+
+            esq, dir_ = st.columns([1, 1])
+            with esq, st.form(f"form_etq_{id_sel}"):
+                st.markdown("**📮 Endereço de entrega**")
+                e_nome = st.text_input("Nome do destinatário", value=ped["nome"])
+                c1, c2 = st.columns([1, 2])
+                e_cep = c1.text_input("CEP", value=ped["ent_cep"])
+                e_rua = c2.text_input("Rua / avenida", value=ped["ent_rua"])
+                c3, c4 = st.columns([1, 2])
+                e_num = c3.text_input("Número", value=ped["ent_numero"])
+                e_comp = c4.text_input("Complemento (apto, bloco, referência)", value=ped["ent_complemento"])
+                e_bai = st.text_input("Bairro", value=ped["ent_bairro"])
+                c5, c6 = st.columns([3, 1])
+                e_cid = c5.text_input("Cidade", value=ped["ent_cidade"])
+                e_uf = c6.text_input("UF", value=ped["ent_uf"], max_chars=2)
+                c7, c8 = st.columns(2)
+                e_tel = c7.text_input("Telefone", value=ped["telefone"])
+                e_peso = c8.text_input("Peso do pacote (kg)", value=ped["ent_peso"], placeholder="0,5")
+                b1, b2 = st.columns(2)
+                buscar = b1.form_submit_button("🔎 Completar pelo CEP", use_container_width=True)
+                salvar = b2.form_submit_button("💾 Salvar endereço", type="primary", use_container_width=True)
+            if buscar or salvar:
+                dados = {"nome": e_nome.strip(), "ent_cep": e_cep.strip(), "ent_rua": e_rua.strip(),
+                         "ent_numero": e_num.strip(), "ent_complemento": e_comp.strip(),
+                         "ent_bairro": e_bai.strip(), "ent_cidade": e_cid.strip(),
+                         "ent_uf": e_uf.strip().upper(), "telefone": e_tel.strip(), "ent_peso": e_peso.strip()}
+                ok = True
+                if buscar:
+                    achado = consultar_cep(e_cep)
+                    if achado:
+                        dados.update(ent_cep=achado.get("cep", dados["ent_cep"]),
+                                     ent_rua=achado.get("logradouro") or dados["ent_rua"],
+                                     ent_bairro=achado.get("bairro") or dados["ent_bairro"],
+                                     ent_cidade=achado.get("localidade") or dados["ent_cidade"],
+                                     ent_uf=achado.get("uf") or dados["ent_uf"])
+                    else:
+                        ok = False
+                        st.error("CEP não encontrado. Confira os 8 números.")
+                if ok:
+                    dados["endereco_entrega"] = (
+                        ", ".join(x for x in [dados["ent_rua"], dados["ent_numero"], dados["ent_complemento"],
+                                              dados["ent_bairro"]] if x)
+                        + f" - {dados['ent_cidade']}/{dados['ent_uf']} CEP {dados['ent_cep']}")
+                    alvo = pedidos["id_pedido"] == id_sel
+                    for campo, valor in dados.items():
+                        pedidos.loc[alvo, campo] = valor
+                    gravar_csv(ARQ_PEDIDOS, pedidos)
+                    # Guarda também no cadastro do cliente
+                    clientes = ler_csv(ARQ_CLIENTES, COLUNAS_CLIENTES)
+                    alvo_c = clientes["telefone"].astype(str) == str(ped["telefone"])
+                    if alvo_c.any():
+                        clientes.loc[alvo_c, "cep"] = dados["ent_cep"]
+                        clientes.loc[alvo_c, "endereco"] = ", ".join(
+                            x for x in [dados["ent_rua"], dados["ent_numero"], dados["ent_complemento"],
+                                        dados["ent_bairro"]] if x)
+                        clientes.loc[alvo_c, "cidade"] = dados["ent_cidade"]
+                        clientes.loc[alvo_c, "uf"] = dados["ent_uf"]
+                        gravar_csv(ARQ_CLIENTES, clientes)
+                    st.rerun()
+
+            with dir_:
+                st.markdown("**🏷️ Prévia da etiqueta**")
+                faltando = [n for n, c in [("CEP", "ent_cep"), ("rua", "ent_rua"), ("número", "ent_numero"),
+                                           ("bairro", "ent_bairro"), ("cidade", "ent_cidade"), ("UF", "ent_uf")]
+                            if not str(ped[c]).strip()]
+                if faltando:
+                    st.warning("Falta preencher: " + ", ".join(faltando) + ".")
+                components.html(html_etiquetas([ped], imprimir=False), height=520, scrolling=True)
+                st.markdown("**O que imprimir?**")
+                ck1, ck2 = st.columns(2)
+                com_etq = ck1.checkbox("🏷️ Etiqueta", value=True, key="imp_etq")
+                com_decl = ck2.checkbox("📦 Declaração de conteúdo", value=False, key="imp_decl")
+                st.download_button("🖨️ Imprimir o que está marcado",
+                                   pacote_impressao([ped], com_etq, com_decl).encode("utf-8"),
+                                   f"etiqueta_{id_sel}.html", "text/html", type="primary",
+                                   use_container_width=True)
+                st.caption("Abra o arquivo baixado: a tela de impressão abre sozinha.")
+                texto = (f"{ped['nome']}\n{ped['ent_rua']}, {ped['ent_numero'] or 'S/N'}"
+                         + (f" - {ped['ent_complemento']}" if ped["ent_complemento"] else "")
+                         + f"\n{ped['ent_bairro']}\n{ped['ent_cidade']} / {ped['ent_uf']}\nCEP {ped['ent_cep']}")
+                st.markdown("**📋 Endereço para copiar e colar**")
+                st.code(texto, language=None)
+
+            st.divider()
+            st.markdown("**🖨️ Imprimir várias etiquetas de uma vez (4 por folha)**")
+            ids_lote = st.multiselect("Escolha os pedidos", prontos["id_pedido"].tolist()[::-1],
+                                      default=prontos["id_pedido"].tolist()[::-1], key="etq_lote")
+            if ids_lote:
+                lote = [p for _, p in pedidos[pedidos["id_pedido"].isin(ids_lote)].iterrows()]
+                lk1, lk2 = st.columns(2)
+                lote_etq = lk1.checkbox("🏷️ Etiquetas", value=True, key="lote_etq")
+                lote_decl = lk2.checkbox("📦 Declarações de conteúdo", value=False, key="lote_decl")
+                st.download_button(f"🖨️ Imprimir {len(lote)} pedido(s)",
+                                   pacote_impressao(lote, lote_etq, lote_decl).encode("utf-8"),
+                                   "etiquetas.html", "text/html", type="primary")
     # ---------------------------------------------------------- NOTA FISCAL
     elif secao == "📄 Nota fiscal":
         guia, emitir, dados = st.tabs(["📘 Como funciona", "🧾 Notas dos pedidos", "🏢 Meus dados fiscais"])
@@ -2231,6 +2409,8 @@ with st.sidebar:
                 st.warning("Pagamento com cartão em breve. Escolha Pix ou combine pelo WhatsApp.")
             st.text_input("Seu nome", key="cli_nome")
             st.text_input("Seu WhatsApp (com DDD)", key="cli_tel", placeholder="55999999999")
+            st.text_input("Número da casa", key="cli_numero")
+            st.text_input("Complemento (opcional)", key="cli_comp", placeholder="apto, bloco, referência")
             st.text_input("Seu e-mail (opcional)", key="cli_email", placeholder="voce@email.com")
             if st.session_state.get("erro_cliente"):
                 st.error(st.session_state.erro_cliente)
