@@ -2684,8 +2684,35 @@ if codigo_ap:
 # ===============================================================
 # BARRA LATERAL DO CLIENTE: carrinho, frete, pagamento
 # ===============================================================
-with st.sidebar:
-    st.header("🛒 Seu Carrinho")
+st.markdown("""<style>
+[data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] { display: none !important; }
+.block-container { padding-left: 350px !important; max-width: 100% !important; }
+.st-key-carrinho_fixo { position: fixed; top: 0; left: 0; bottom: 0; width: 330px; z-index: 999990;
+    background: #ffffff; border-right: 1px solid #dbe1ea; padding: 16px 14px 60px; overflow-y: auto;
+    box-shadow: 4px 0 16px rgba(15, 23, 42, .08); }
+.st-key-carrinho_fixo [data-testid="stVerticalBlock"] { gap: .45rem; }
+@media (max-width: 900px) {
+    .st-key-carrinho_fixo { position: static; width: auto; box-shadow: none; border: 1px solid #dbe1ea;
+        border-radius: 14px; }
+    .block-container { padding-left: 1rem !important; } }
+</style>""", unsafe_allow_html=True)
+
+
+def mudar_qtd(indice: int, delta: int):
+    """Aumenta ou diminui a quantidade de um item direto no carrinho."""
+    item = st.session_state.carrinho[indice]
+    nova = item["quantidade"] + delta
+    if nova < 1:
+        st.session_state.carrinho.pop(indice)
+    else:
+        total, brindes, econ = calcular_promocao(item["preco_unitario"], nova)
+        item.update(quantidade=nova, unidades_gratis=brindes, desconto=econ, subtotal=total)
+    st.session_state.link_whatsapp = None
+    st.session_state.frete = None
+
+
+with st.container(key="carrinho_fixo"):
+    st.markdown("### 🛒 Seu Carrinho")
     if not st.session_state.carrinho:
         st.info("O carrinho está vazio. Escolha uma categoria para começar.")
     else:
@@ -2703,7 +2730,12 @@ with st.sidebar:
                 f"<div class='detalhe'>{item['quantidade']}x R$ {item['preco_unitario']:.2f}</div>"
                 f"<div class='detalhe'><b>R$ {item['subtotal']:.2f}</b>{brinde}</div></div></div>",
                 unsafe_allow_html=True)
-            st.button("🗑️ Remover", key=f"del_{i}_{item['id']}", on_click=remover_do_carrinho,
+            q1, q2, q3 = st.columns(3)
+            q1.button("➖", key=f"menos_{i}_{item['id']}", on_click=mudar_qtd, args=(i, -1),
+                      use_container_width=True, help="Diminuir")
+            q2.button("➕", key=f"mais_{i}_{item['id']}", on_click=mudar_qtd, args=(i, 1),
+                      use_container_width=True, help="Aumentar")
+            q3.button("🗑️", key=f"del_{i}_{item['id']}", on_click=remover_do_carrinho, help="Tirar do carrinho",
                       args=(i,), use_container_width=True)
         linha_desc = f"<div>Desconto empresa ({pct_lote}%): -R$ {valor_desc:.2f}</div>" if pct_lote else ""
         st.markdown(f"<div class='resumo-total'><div>{qtd_total} item(ns)</div><div>Subtotal: R$ {subtotal:.2f}</div>"
@@ -2848,41 +2880,4 @@ elif pagina == "categoria" and st.session_state.categoria_aberta in CATALOGO:
     itens = CATALOGO[cat_nome]["itens"]
     v1, v2 = st.columns([1, 5])
     v1.button("⬅️ Voltar", on_click=ir_para, args=("inicio",), key="voltar_cat", use_container_width=True)
-    v2.markdown(f"## {ICONES.get(cat_nome, '🏷️')} {cat_nome} · {len(itens)} modelos")
-    if st.session_state.get("ultimo_adicionado"):
-        st.success(f"✅ {st.session_state.ultimo_adicionado} adicionado ao carrinho! Veja na barra lateral.")
-        st.session_state.ultimo_adicionado = None
-    busca = st.text_input("🔎 Buscar nesta categoria", key=f"busca_{cat_nome}")
-    if busca.strip():
-        itens = [i for i in itens if busca.strip().lower() in i["nome"].lower()]
-    colunas = 5 if len(itens) > 8 else 4
-    for inicio in range(0, len(itens), colunas):
-        cols = st.columns(colunas)
-        for idx, item in enumerate(itens[inicio:inicio + colunas]):
-            with cols[idx], st.container(border=True):
-                mostrar_imagem(item["imagem"], cat_nome, item["nome"], classe="cat-img")
-                selo = "<span class='selo selo-promo'>PROMOÇÃO</span> " if item["em_promo"] else ""
-                st.markdown(f"{selo}**{item['nome']}**  \nR$ {item['preco']:.2f}", unsafe_allow_html=True)
-                if st.button("🔍 Ver detalhes", key=f"ver_{item['id']}", use_container_width=True, type="primary"):
-                    abrir_produto(item)
-
-else:
-    st.markdown("### 📦 Categorias")
-    if not CATALOGO:
-        st.info("Nenhum produto ativo no momento.")
-    categorias = list(CATALOGO.keys())
-    total = len(categorias)
-    # Mais categorias = mais colunas, para tudo caber na tela sem rolar
-    colunas = 3 if total <= 3 else 4 if total <= 8 else 5 if total <= 10 else 6
-    for inicio in range(0, total, colunas):
-        cols = st.columns(colunas)
-        for idx, cat_nome in enumerate(categorias[inicio:inicio + colunas]):
-            destaque = CATALOGO[cat_nome]["destaque"]
-            with cols[idx], st.container(border=True):
-                mostrar_imagem(destaque["imagem"], cat_nome, cat_nome, classe="cat-img")
-                st.markdown(f"**{cat_nome}**  \nA partir de R$ {destaque['preco']:.2f}")
-                if st.button(f"Ver {len(CATALOGO[cat_nome]['itens'])} modelos", key=f"btn_cat_{cat_nome}",
-                             use_container_width=True):
-                    registrar_clique("abriu_categoria", cat_nome)
-                    ir_para("categoria", cat_nome)
-                    st.rerun()
+    v2.markdown(f"## {ICONES.get(cat_nome, '🏷️')} 
