@@ -99,7 +99,6 @@ LOJA_PADRAO = {
         {"a_partir_de": 100, "desconto_pct": 15},
     ],
 }
-
 # ---------------------------------------------------------------
 # Colunas de cada tabela
 # ---------------------------------------------------------------
@@ -300,8 +299,6 @@ def codigo_pix(chave: str, nome: str, cidade: str, valor: float, txid: str = "**
              + _campo_pix("60", (cidade or "BRASIL")[:15])
              + _campo_pix("62", _campo_pix("05", txid)) + "6304")
     return corpo + _crc16(corpo)
-
-
 ICONES_REDES = {
     "instagram": "https://cdn.simpleicons.org/instagram/E4405F",
     "facebook": "https://cdn.simpleicons.org/facebook/1877F2",
@@ -436,8 +433,6 @@ st.markdown(f"""
 def titulo_secao(texto: str):
     """Faixa colorida para destacar os tópicos do painel."""
     st.markdown(f"<div class='titulo-secao'>{html.escape(texto)}</div>", unsafe_allow_html=True)
-
-
 # ===============================================================
 # IMAGENS
 # ===============================================================
@@ -570,8 +565,6 @@ def montar_catalogo(df: pd.DataFrame) -> dict:
             "itens": itens,
         }
     return catalogo
-
-
 def carregar_frete() -> pd.DataFrame:
     df = ler_csv(ARQ_FRETE, COLUNAS_FRETE)
     if df.empty:
@@ -698,8 +691,6 @@ def analise_estoque(margem_dias: int = 7) -> pd.DataFrame:
                       if pd.notna(d) else "")
     est["repor"], est["comprar"], est["data_limite"] = repor, comprar, limite
     return est
-
-
 def salvar_artes(id_pedido: str) -> str:
     """Grava as fotos/artes do carrinho na pasta artes e devolve a lista em texto (JSON)."""
     os.makedirs(PASTA_ARTES, exist_ok=True)
@@ -791,8 +782,6 @@ ESTADO_INICIAL = {
 for chave, valor in ESTADO_INICIAL.items():
     if chave not in st.session_state:
         st.session_state[chave] = valor
-
-
 # ===============================================================
 # CARRINHO (com modo empresa e preço por lote)
 # ===============================================================
@@ -1044,22 +1033,6 @@ def abrir_produto(item: dict):
             st.radio("Tamanho / tipo", item["variacoes"], key=f"var_{item['id']}", horizontal=True)
         st.markdown("**🎨 Personalize do seu jeito**")
         k = item["id"]
-        galeria = []  # a grade de artes agora fica embaixo da foto grande
-        if galeria:
-            st.caption("Escolha uma das nossas artes prontas:")
-            for ini in range(0, len(galeria), 4):
-                for c, a in zip(st.columns(4), galeria[ini:ini + 4]):
-                    with c:
-                        marcada = st.session_state.get(f"pgal_{k}") == a["id"]
-                        borda = "3px solid #7c3aed" if marcada else "1px solid #d1d5db"
-                        st.markdown(f"<img src='{a['imagem']}' style='width:100%;aspect-ratio:1/1;object-fit:cover;"
-                                    f"border-radius:8px;border:{borda};'>", unsafe_allow_html=True)
-                        st.button(("✅ " if marcada else "") + (a["nome"][:14] or "Escolher"), key=f"gal_{k}_{a['id']}",
-                                  use_container_width=True, type="primary" if marcada else "secondary",
-                                  on_click=lambda kk=k, aid=a["id"]: st.session_state.update({f"pgal_{kk}": aid}))
-            if st.session_state.get(f"pgal_{k}"):
-                st.button("✖ Tirar a arte pronta", key=f"galx_{k}",
-                          on_click=lambda kk=k: st.session_state.update({f"pgal_{kk}": None}))
         st.file_uploader("Ou envie a sua foto ou arte (até 3 MB)", type=["png", "jpg", "jpeg", "webp"], key=f"arte_{k}")
         st.text_input("Texto ou nome na peça (opcional)", key=f"ptxt_{k}")
         f1, f2 = st.columns(2)
@@ -1068,27 +1041,8 @@ def abrir_produto(item: dict):
         st.slider("Tamanho da arte na peça (%)", 30, 100, 100, step=5, key=f"pesc_{k}")
         st.text_area("Como você quer? (posição, cores, detalhes)", key=f"pobs_{k}", height=70)
         arq = st.session_state.get(f"arte_{k}")
-        src = ""
         if arq is not None and arq.size > 3 * 1024 * 1024:
             st.error("A foto passa de 3 MB. Diminua o tamanho e envie de novo.")
-        elif arq is not None:
-            src = f"data:{arq.type or 'image/png'};base64," + base64.b64encode(arq.getvalue()).decode()
-        elif st.session_state.get(f"pgal_{k}"):
-            src = next((a["imagem"] for a in ARTES_PRONTAS if a["id"] == st.session_state[f"pgal_{k}"]), "")
-        txt = st.session_state.get(f"ptxt_{k}", "")
-        if False:  # o exemplo agora aparece na foto grande
-            esc = st.session_state.get(f"pesc_{k}", 100)
-            forma = "3/4" if "Camis" in item["categoria"] else "1/1" if "Almof" in item["categoria"] else "2/1"
-            foto = (f"<img src='{src}' style='max-width:{esc}%;max-height:{int(esc * (0.7 if txt else 1))}%;"
-                    "object-fit:contain;'>" if src else "")
-            fonte = CSS_FONTES.get(st.session_state.get(f"pfonte_{k}", "Padrão"), "Arial")
-            cor_t = st.session_state.get(f"pcor_{k}", "#000000")
-            st.markdown(f"<div style='width:100%;aspect-ratio:{forma};background:#fff;border:2px solid #cbd5e1;"
-                        "border-radius:16px 16px 32px 32px;display:flex;flex-direction:column;align-items:center;"
-                        "justify-content:center;overflow:hidden;box-shadow:inset -20px 0 26px rgba(0,0,0,.08);'>"
-                        f"{foto}<div style='font-family:{fonte};color:{cor_t};font-size:1.4rem;font-weight:700;"
-                        f"text-align:center;'>{html.escape(txt)}</div></div>", unsafe_allow_html=True)
-            st.caption("Exemplo de como vai ficar. A gente confere tudo antes de produzir.")
         st.divider()
         qtd = st.number_input("Quantidade", min_value=1, max_value=10000, value=1, key=f"qtd_{item['id']}")
         _, brindes, eco = calcular_promocao(item["preco"], qtd)
@@ -1101,8 +1055,6 @@ def abrir_produto(item: dict):
         texto = urllib.parse.quote(f"Olá! Tenho interesse no produto {item['nome']}. Pode me ajudar?")
         st.link_button("💬 Tirar dúvida no WhatsApp", f"https://wa.me/{LOJA['whatsapp']}?text={texto}",
                        use_container_width=True)
-
-
 # ===============================================================
 # ACOMPANHAR MEU PEDIDO (o cliente consulta)
 # ===============================================================
@@ -1354,8 +1306,6 @@ intuito comercial, operações de circulação de mercadoria. Declaro ainda que 
 conteúdo inflamável, explosivo, causador de combustão ou qualquer outro proibido pela legislação.</p>
 <p>_____________________, ____/____/______</p><br><p>_____________________________________<br>Assinatura do declarante</p>
 </body></html>"""
-
-
 # ===============================================================
 # BACKUP TOTAL (um arquivo .zip com tudo)
 # ===============================================================
@@ -1401,6 +1351,140 @@ def restaurar_backup_zip(arquivo) -> int:
 
 
 # ===============================================================
+# MINI EMPRESA AO VIVO (maquete animada com a equipe trabalhando)
+# ===============================================================
+CSS_MINI = """<style>
+@keyframes me-anda {0%,10%{transform:translate(0,0)}45%,55%{transform:translate(78px,0)}90%,100%{transform:translate(0,0)}}
+@keyframes me-papel {0%,50%{opacity:1}51%,100%{opacity:0}}
+@keyframes me-martelo {0%,40%,100%{transform:rotate(-35deg)}50%{transform:rotate(18deg)}}
+@keyframes me-estoque {0%,100%{transform:translateX(0)}50%{transform:translateX(-46px)}}
+@keyframes me-prensa {0%,100%{transform:translateY(0)}50%{transform:translateY(10px)}}
+@keyframes me-esteira {0%{transform:translateX(0);opacity:0}8%{opacity:1}92%{opacity:1}100%{transform:translateX(205px);opacity:0}}
+@keyframes me-saida {0%{transform:translateX(0);opacity:1}75%{transform:translateX(62px);opacity:1}100%{transform:translateX(72px);opacity:0}}
+@keyframes me-balao {0%,100%{opacity:0}25%,75%{opacity:1}}
+@keyframes me-pula {0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
+@keyframes me-rolo {from{stroke-dashoffset:0}to{stroke-dashoffset:-20}}
+.me-ent{animation:me-anda 6s ease-in-out infinite}
+.me-pap{animation:me-papel 6s linear infinite}
+.me-mart{transform-box:fill-box;transform-origin:5% 50%;animation:me-martelo 1.2s ease-in-out infinite}
+.me-est{animation:me-estoque 3.4s ease-in-out infinite}
+.me-pre{animation:me-prensa 1s ease-in-out infinite}
+.me-cx1,.me-cx2,.me-cx3{animation:me-esteira 4.5s linear infinite}
+.me-cx2{animation-delay:1.5s}.me-cx3{animation-delay:3s}
+.me-sai{animation:me-saida 3s ease-in infinite}
+.me-bal{animation:me-balao 2.4s ease-in-out infinite}
+.me-bal2{animation:me-balao 2.4s ease-in-out infinite;animation-delay:1.2s}
+.me-van{animation:me-pula .5s ease-in-out infinite}
+.me-rolo{stroke-dasharray:6 4;animation:me-rolo .6s linear infinite}
+.me-parado,.me-parado *{animation:none !important}
+.me-flut{position:fixed;right:16px;bottom:70px;width:330px;z-index:999999;background:#fff;
+  border:1px solid #d9dfeb;border-radius:14px;box-shadow:0 8px 24px rgba(0,0,0,.18);overflow:hidden}
+.me-flut summary{cursor:pointer;padding:6px 10px;font-weight:700;font-size:.85rem;
+  background:#1d4ed8;color:#fff !important;list-style:none}
+@media (max-width: 700px){.me-flut{width:240px;right:8px;bottom:64px}}
+</style>"""
+
+
+def numeros_mini():
+    """Conta pedidos novos, em produção, enviados e materiais para repor."""
+    ped = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
+    novos = int((ped["status"] == "Novo").sum())
+    prod = int(ped["status"].isin(["Pago", "Em produção"]).sum())
+    envio = int((ped["status"] == "Enviado").sum())
+    an = analise_estoque(int(LOJA.get("estoque_margem_dias", 7)))
+    repor = int((an["repor"] == True).sum()) if len(an) else 0
+    return novos, prod, envio, repor
+
+
+def pessoa(x, y, camisa, classe="", carga="", cabelo="#444441"):
+    """Bonequinho: sombra, corpo, cabeça e cabelo."""
+    return (f"<g class='{classe}'><ellipse cx='{x}' cy='{y + 27}' rx='9' ry='3' fill='#00000022'/>"
+            f"<rect x='{x - 7}' y='{y + 7}' width='14' height='19' rx='6' fill='{camisa}'/>"
+            f"<circle cx='{x}' cy='{y}' r='7' fill='#F5C4B3'/>"
+            f"<path d='M{x - 7} {y - 1} a7 7 0 0 1 14 0 Z' fill='{cabelo}'/>{carga}</g>")
+def svg_mini(novos, prod, envio, repor):
+    """Desenha a empresa: vendas, gerência, estoque, produção com esteira e entrega."""
+    ativo = lambda cond, cls: cls if cond else cls + " me-parado"
+    papel = "<rect class='me-pap' x='103' y='62' width='9' height='11' fill='#fff' stroke='#888780'/>"
+    caixa_est = "<rect x='336' y='70' width='12' height='10' fill='#FAC775' stroke='#854F0B'/>"
+    caneca = "<rect x='168' y='172' width='8' height='9' rx='1' fill='#fff' stroke='#0F6E56'/>"
+    aviso_est = f"⚠️ repor {repor}" if repor else "✅ em dia"
+    return f"""<svg viewBox='0 0 420 260' width='100%' style='display:block;background:#F1EFE8'>
+<rect x='8' y='8' width='128' height='112' rx='6' fill='#FBEAF0'/>
+<text x='14' y='23' font-size='10' font-weight='700' fill='#72243E'>💬 Vendas</text>
+<rect x='18' y='84' width='108' height='12' rx='2' fill='#D4537E'/>
+<rect x='30' y='74' width='18' height='10' fill='#444441'/><rect x='88' y='74' width='18' height='10' fill='#444441'/>
+{pessoa(39, 52, '#993556', cabelo='#633806')}
+<g class='{ativo(True, "me-bal")}'><ellipse cx='58' cy='36' rx='14' ry='8' fill='#fff' stroke='#D4537E'/>
+<text x='58' y='39' font-size='8' text-anchor='middle' fill='#72243E'>R$</text></g>
+{pessoa(97, 52, '#D4537E', ativo(novos, 'me-ent'), papel if novos else '')}
+<rect x='144' y='8' width='132' height='112' rx='6' fill='#E6F1FB'/>
+<text x='150' y='23' font-size='9.5' font-weight='700' fill='#0C447C'>🏢 Gerência · {novos} p/ aprovar</text>
+{pessoa(225, 46, '#26215C', cabelo='#888780')}
+<rect x='190' y='70' width='76' height='16' rx='2' fill='#85B7EB'/>
+<rect x='212' y='74' width='30' height='8' fill='#fff'/>
+<text x='227' y='80.5' font-size='6' text-anchor='middle' fill='#0C447C'>CHEFE</text>
+<g class='{ativo(novos, "me-mart")}'><rect x='246' y='60' width='18' height='3' fill='#854F0B'/>
+<rect x='262' y='55' width='8' height='13' rx='1' fill='#633806'/></g>
+{pessoa(165, 86, '#185FA5', carga="<rect x='171' y='96' width='8' height='10' fill='#fff' stroke='#185FA5'/>")}
+<rect x='284' y='8' width='128' height='112' rx='6' fill='#FAEEDA'/>
+<text x='290' y='23' font-size='10' font-weight='700' fill='#633806'>📦 Estoque · {aviso_est}</text>
+<rect x='352' y='28' width='52' height='84' fill='#BA7517'/>
+<rect x='356' y='34' width='20' height='14' fill='#FAC775'/><rect x='380' y='34' width='20' height='14' fill='#fff'/>
+<rect x='356' y='54' width='20' height='14' fill='#fff'/><rect x='380' y='54' width='20' height='14' fill='#FAC775'/>
+<rect x='356' y='74' width='20' height='14' fill='#FAC775'/><rect x='380' y='74' width='20' height='14' fill='#FAC775'/>
+<rect x='356' y='94' width='44' height='14' fill='#fff'/>
+{pessoa(330, 60, '#639922', ativo(True, 'me-est'), caixa_est)}
+<rect x='8' y='128' width='270' height='124' rx='6' fill='#E1F5EE'/>
+<text x='14' y='143' font-size='10' font-weight='700' fill='#085041'>🔥 Produção · {prod} pedido(s)</text>
+<rect x='86' y='150' width='6' height='56' fill='#0F6E56'/>
+<g class='{ativo(prod, "me-pre")}'><rect x='72' y='168' width='34' height='10' rx='2' fill='#085041'/></g>
+{pessoa(52, 160, '#1D9E75')}
+{pessoa(160, 160, '#0F6E56', carga=caneca)}
+{pessoa(228, 160, '#5DCAA5', cabelo='#633806')}
+<rect x='18' y='206' width='250' height='14' rx='7' fill='#444441'/>
+<line class='{ativo(prod, "me-rolo")}' x1='26' y1='213' x2='260' y2='213' stroke='#B4B2A9' stroke-width='3'/>
+<g class='{ativo(prod, "me-cx1")}'><rect x='22' y='194' width='14' height='12' fill='#FAC775' stroke='#854F0B'/></g>
+<g class='{ativo(prod, "me-cx2")}'><rect x='24' y='195' width='10' height='11' rx='1' fill='#fff' stroke='#0F6E56'/>
+<path d='M34 198 q4 3 0 6' fill='none' stroke='#0F6E56'/></g>
+<g class='{ativo(prod, "me-cx3")}'><rect x='22' y='196' width='14' height='10' rx='2' fill='#7F77DD'/></g>
+<rect x='284' y='128' width='128' height='124' rx='6' fill='#EAF3DE'/>
+<text x='290' y='143' font-size='10' font-weight='700' fill='#27500A'>🚚 Entrega · {envio}</text>
+<rect x='388' y='150' width='18' height='56' fill='#854F0B'/><circle cx='392' cy='180' r='1.5' fill='#FAC775'/>
+{pessoa(320, 158, '#3B6D11')}
+<g class='{ativo(prod or envio, "me-sai")}'><rect x='300' y='194' width='14' height='12' fill='#FAC775' stroke='#854F0B'/></g>
+<g class='{ativo(envio, "me-van")}'><rect x='300' y='222' width='50' height='20' rx='3' fill='#fff' stroke='#3B6D11'/>
+<rect x='340' y='226' width='12' height='10' fill='#B5D4F4'/>
+<text x='320' y='235' font-size='6' text-anchor='middle' fill='#27500A'>ENTREGA</text>
+<circle cx='310' cy='243' r='4' fill='#2C2C2A'/><circle cx='340' cy='243' r='4' fill='#2C2C2A'/></g>
+</svg>"""
+
+
+@st.fragment(run_every=15)
+def cena_ao_vivo(flutuante: bool = False):
+    """Telinha animada. Atualiza sozinha a cada 15 segundos com os pedidos reais."""
+    n, pr, ev, r = numeros_mini()
+    if flutuante:
+        st.markdown(CSS_MINI + "<details class='me-flut' open><summary>🏭 Nossa equipe ao vivo</summary>"
+                    + svg_mini(n, pr, ev, r) + "</details>", unsafe_allow_html=True)
+    else:
+        st.markdown(CSS_MINI + "<div style='border-radius:14px;overflow:hidden;border:1px solid #dbe1ea'>"
+                    + svg_mini(n, pr, ev, r) + "</div>", unsafe_allow_html=True)
+
+
+def decidir_pedido(id_pedido: str, novo_status: str):
+    """O chefe bate o martelo: aprova (vai pra produção) ou recusa."""
+    ped = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
+    ped.loc[ped["id_pedido"] == id_pedido, "status"] = novo_status
+    gravar_csv(ARQ_PEDIDOS, ped)
+
+
+def mudar_status(id_pedido: str, novo_status: str):
+    """Avança o pedido na produção ou na entrega."""
+    decidir_pedido(id_pedido, novo_status)
+
+
+# ===============================================================
 # ENGRENAGEM DISCRETA DO ADMINISTRADOR (canto superior direito)
 # ===============================================================
 @st.dialog("Acesso do administrador")
@@ -1418,8 +1502,6 @@ if not st.session_state.admin:
     _c_espaco, _c_engrenagem = st.columns([30, 1])
     if _c_engrenagem.button("⚙", key="btn_engrenagem", help=" "):
         abrir_login_admin()
-
-
 # ===============================================================
 # PAINEL EMPRESARIAL: estilo claro, menu fixo à esquerda
 # ===============================================================
@@ -1445,7 +1527,7 @@ h1, h2, h3, h4, h5, h6, p, span, label, li, div { color: #1f2937; }
     width: 100%; justify-content: flex-start !important; text-align: left;
     background: #f8fafc !important; color: #1f2937 !important;
     border: 1px solid #e2e8f0 !important; border-radius: 10px !important;
-    padding: 2px 10px !important; min-height: 0 !important; height: clamp(30px, calc((100vh - 200px) / 18), 52px); font-weight: 600 !important; box-shadow: none !important; }
+    padding: 2px 10px !important; min-height: 0 !important; height: clamp(30px, calc((100vh - 200px) / 19), 52px); font-weight: 600 !important; box-shadow: none !important; }
 .st-key-menu_admin .stButton > button div { justify-content: flex-start !important; }
 .st-key-menu_admin .stButton > button p { color: inherit !important; font-size: clamp(.8rem, 1.7vh, .98rem); margin: 0 !important; line-height: 1.1; }
 .st-key-menu_admin .stButton > button:hover { background: #ede9fe !important; border-color: #8b5cf6 !important; }
@@ -1542,14 +1624,13 @@ def ir_secao(destino: str):
 # PAINEL DO ADMINISTRADOR
 # ===============================================================
 SECOES_ADMIN = {
-    "VISÃO GERAL": ["📊 Resumo"],
+    "VISÃO GERAL": ["📊 Resumo", "🏙️ Empresa ao vivo"],
     "CATÁLOGO": ["📦 Produtos", "🖼️ Fotos", "🎨 Galeria de artes"],
     "VENDAS": ["👥 Clientes", "🧾 Pedidos", "🚚 Rastreio", "🏷️ Etiquetas", "🖨️ Artes", "📄 Nota fiscal", "📍 Frete"],
     "COMPRAS": ["🏭 Estoque e compras"],
     "MARKETING": ["🏢 Apresentações", "🎬 Vitrine", "👁️ Interesse"],
     "CONFIGURAÇÃO": ["🎨 Loja e redes", "💾 Backup"],
 }
-
 if st.session_state.admin:
     st.markdown(CSS_PAINEL, unsafe_allow_html=True)
 
@@ -1580,8 +1661,58 @@ if st.session_state.admin:
         av2.button("📦 Ver e repor", key="aviso_estoque", type="primary", use_container_width=True,
                    on_click=ir_secao, args=("🏭 Estoque e compras",))
 
+    # ---------------------------------------------------------- EMPRESA AO VIVO (miniatura)
+    if secao == "🏙️ Empresa ao vivo":
+        st.caption("Sua empresa em miniatura, trabalhando com os pedidos de verdade. "
+                   "Toque nos botões de cada setor para agir.")
+        cena_ao_vivo()
+        pedidos_v = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
+        s1, s2, s3, s4 = st.columns(4)
+        with s1, st.container(border=True):
+            st.markdown("**💬 Vendas**")
+            st.caption(f"{len(pedidos_v)} pedido(s) no total")
+            st.button("Ver clientes", key="mini_vend", use_container_width=True,
+                      on_click=ir_secao, args=("👥 Clientes",))
+            st.button("Ver interesse", key="mini_int", use_container_width=True,
+                      on_click=ir_secao, args=("👁️ Interesse",))
+        with s2, st.container(border=True):
+            st.markdown("**🔨 Mesa do chefe**")
+            novos_v = pedidos_v[pedidos_v["status"] == "Novo"]
+            if novos_v.empty:
+                st.success("Nenhum pedido esperando.")
+            for _, p in novos_v.iloc[::-1].head(6).iterrows():
+                st.markdown(f"**{p['id_pedido']}** · {p['nome']}  \nR$ {p['total']}")
+                st.caption(str(p["itens"])[:120])
+                a, b = st.columns(2)
+                a.button("✅", key=f"apr_{p['id_pedido']}", help="Aprovar e mandar para a produção",
+                         type="primary", use_container_width=True,
+                         on_click=decidir_pedido, args=(p["id_pedido"], "Em produção"))
+                b.button("❌", key=f"rec_{p['id_pedido']}", help="Recusar pedido", use_container_width=True,
+                         on_click=decidir_pedido, args=(p["id_pedido"], "Cancelado"))
+        with s3, st.container(border=True):
+            st.markdown("**🔥 Produção (esteira)**")
+            prod_v = pedidos_v[pedidos_v["status"].isin(["Pago", "Em produção"])]
+            if prod_v.empty:
+                st.caption("Esteira parada, sem pedidos.")
+            for _, p in prod_v.iloc[::-1].head(6).iterrows():
+                st.markdown(f"**{p['id_pedido']}** · {p['nome']}")
+                st.button("📦 Pronto, enviar", key=f"env_{p['id_pedido']}", use_container_width=True,
+                          on_click=mudar_status, args=(p["id_pedido"], "Enviado"))
+            st.button("🖨️ Artes para imprimir", key="mini_art", use_container_width=True,
+                      on_click=ir_secao, args=("🖨️ Artes",))
+        with s4, st.container(border=True):
+            st.markdown("**🚚 Entrega e estoque**")
+            env_v = pedidos_v[pedidos_v["status"] == "Enviado"]
+            for _, p in env_v.iloc[::-1].head(6).iterrows():
+                st.markdown(f"**{p['id_pedido']}** · {p['nome']}")
+                st.button("✅ Entregue", key=f"ent_{p['id_pedido']}", use_container_width=True,
+                          on_click=mudar_status, args=(p["id_pedido"], "Entregue"))
+            st.button("🏷️ Etiquetas", key="mini_etq", use_container_width=True,
+                      on_click=ir_secao, args=("🏷️ Etiquetas",))
+            st.button("📦 Estoque", key="mini_est", use_container_width=True,
+                      on_click=ir_secao, args=("🏭 Estoque e compras",))
     # ---------------------------------------------------------- RESUMO (dashboard)
-    if secao == "📊 Resumo":
+    elif secao == "📊 Resumo":
         clientes_r = ler_csv(ARQ_CLIENTES, COLUNAS_CLIENTES)
         pedidos_r = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
         pedidos_r["total_num"] = pd.to_numeric(pedidos_r["total"], errors="coerce").fillna(0.0)
@@ -1592,8 +1723,8 @@ if st.session_state.admin:
         ticket = faturamento / len(validos) if len(validos) else 0.0
 
         # Atalhos rápidos (botões clicáveis)
-        atalhos = [("➕ Novo produto", "📦 Produtos"), ("🧾 Ver pedidos", "🧾 Pedidos"),
-                   ("🚚 Rastrear envios", "🚚 Rastreio"), ("🏢 Nova apresentação", "🏢 Apresentações"),
+        atalhos = [("🏙️ Empresa ao vivo", "🏙️ Empresa ao vivo"), ("➕ Novo produto", "📦 Produtos"),
+                   ("🧾 Ver pedidos", "🧾 Pedidos"), ("🚚 Rastrear envios", "🚚 Rastreio"),
                    ("💾 Fazer backup", "💾 Backup")]
         for col, (rotulo, destino) in zip(st.columns(len(atalhos)), atalhos):
             col.button(rotulo, key=f"atalho_{destino}", use_container_width=True, type="primary",
@@ -1827,7 +1958,6 @@ if st.session_state.admin:
                 gravar_csv(ARQ_PRODUTOS, df_produtos.drop(index=df_produtos.index[pos_ed]).reset_index(drop=True))
                 st.session_state.editando_produto = None
                 st.rerun()
-
     # ---------------------------------------------------------- FOTOS
     elif secao == "🖼️ Fotos":
         st.caption("Envie a foto do computador ou do celular (até 2 MB). Ela fica guardada no cadastro do produto.")
@@ -1984,7 +2114,6 @@ if st.session_state.admin:
                              use_container_width=True, hide_index=True)
             else:
                 st.info("Ainda não há clientes.")
-
     # ---------------------------------------------------------- PEDIDOS
     elif secao == "🧾 Pedidos":
         pedidos = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
@@ -2162,7 +2291,6 @@ body {{ font-family: Arial, sans-serif; margin: 0; color: #000; }}
             opcoes = [f"{p['id_pedido']} · {p['nome']} · {p['status']}" for _, p in lista.iterrows()]
             id_sel = st.selectbox("Pedido (código e nome do cliente)", opcoes, key="etq_pedido").split(" · ")[0]
             ped = pedidos[pedidos["id_pedido"] == id_sel].iloc[0]
-
             esq, dir_ = st.columns([1, 1])
             with esq, st.form(f"form_etq_{id_sel}"):
                 st.markdown("**📮 Endereço de entrega**")
@@ -2507,7 +2635,6 @@ body {{ margin: 0; font-family: Arial; }}
                 gravar_csv(ARQ_ESTOQUE, base)
                 registrar_movimento(mat, f"{tipo} (manual)", qtd)
                 st.rerun()
-
         with t_forn:
             forn["prazo_dias"] = pd.to_numeric(forn["prazo_dias"], errors="coerce").fillna(7).astype(int)
             forn_edit = st.data_editor(
@@ -2603,7 +2730,6 @@ body {{ margin: 0; font-family: Arial; }}
                 st.info("As entradas e saídas aparecem aqui sozinhas, a cada venda e a cada compra recebida.")
             else:
                 st.dataframe(mov.iloc[::-1], use_container_width=True, hide_index=True, height=400)
-
         with t_preco:
             st.caption("Anote cada preço que o fornecedor te passar. As compras com custo entram aqui sozinhas.")
             with st.form("novo_preco", clear_on_submit=True):
@@ -2623,7 +2749,6 @@ body {{ margin: 0; font-family: Arial; }}
             if precos.empty:
                 st.info("Anote os primeiros preços para o gráfico aparecer.")
             else:
-                # ----- Visão geral: todas as categorias e materiais de uma vez -----
                 cat_map = dict(zip(est["material"], est["categoria"].astype(str)))
                 precos["categoria"] = precos["material"].map(cat_map).fillna("").replace("", "Sem categoria")
                 cats_p = sorted(precos["categoria"].unique().tolist())
@@ -2844,7 +2969,6 @@ Na aba *Notas dos pedidos* existe um botão que gera a declaração pronta para 
         if st.button("💾 Salvar tabela de frete", type="primary", key="salvar_frete"):
             gravar_csv(ARQ_FRETE, frete_editado)
             st.rerun()
-
     # ---------------------------------------------------------- LOJA E REDES
     elif secao == "🎨 Loja e redes":
         with st.form("form_loja"):
@@ -2859,6 +2983,8 @@ Na aba *Notas dos pedidos* existe um botão que gera a declaração pronta para 
                 l_cor = c1.color_picker("Cor principal", value=LOJA["cor_principal"])
                 l_fundo = c2.selectbox("Fundo da página", FUNDOS,
                                        index=FUNDOS.index(LOJA["fundo"]) if LOJA["fundo"] in FUNDOS else 0)
+                l_mini = c1.checkbox("Mostrar a telinha da equipe ao vivo na loja",
+                                     value=bool(LOJA.get("mostrar_mini", True)))
             with t2:
                 c1, c2 = st.columns([2, 1])
                 l_insta = c1.text_input("Link do Instagram", value=LOJA["instagram"],
@@ -2908,6 +3034,7 @@ Na aba *Notas dos pedidos* existe um botão que gera a declaração pronta para 
                 LOJA.update({
                     "nome_empresa": l_nome, "subtitulo": l_sub, "frase_banner": l_frase,
                     "whatsapp": "".join(ch for ch in l_wpp if ch.isdigit()), "cor_principal": l_cor, "fundo": l_fundo,
+                    "mostrar_mini": l_mini,
                     "instagram": l_insta.strip(), "facebook": l_face.strip(), "mostrar_redes": l_redes,
                     "link_loja": l_link.strip(), "pix_chave": l_pix.strip(), "pix_nome": l_pixn.strip(),
                     "pix_cidade": l_pixc.strip(), "pix_instrucoes": l_pixi, "cartao_ligado": l_cartao,
@@ -3244,8 +3371,6 @@ with st.container(key="carrinho_fixo"):
     if st.button("📦 Acompanhar meu pedido", use_container_width=True, key="btn_acomp"):
         abrir_acompanhamento()
     barra_redes(LOJA, tamanho=28)
-
-
 # ===============================================================
 # CADASTRO DA EMPRESA (modo empresa)
 # ===============================================================
@@ -3294,6 +3419,10 @@ with m5.popover("📱 QR da loja", use_container_width=True):
     else:
         st.caption("Em breve.")
 barra_redes(LOJA)
+
+# ----- Telinha flutuante: a equipe em miniatura trabalhando ao vivo (canto de baixo, à direita) -----
+if LOJA.get("mostrar_mini", True):
+    cena_ao_vivo(flutuante=True)
 
 if modo_empresa():
     emp = st.session_state.empresa
