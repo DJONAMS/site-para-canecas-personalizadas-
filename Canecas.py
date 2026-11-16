@@ -43,6 +43,11 @@ COL_MOV = ["data", "material", "tipo", "quantidade", "referencia"]
 STATUS_COMPRA = ["Orçamento", "Pedida", "Paga", "A caminho", "Recebida", "Cancelada"]
 ARQ_PRECOS = "dados_precos_fornecedores.csv"
 COL_PRECO = ["data", "fornecedor", "material", "preco", "origem"]
+ARQ_EQUIPE = "dados_equipe.json"
+ARQ_HIST = "dados_historico_pedidos.csv"
+COL_HIST = ["data", "id_pedido", "status"]
+# Status em que o material já saiu do estoque (o diretor autorizou)
+STATUS_COM_MATERIAL = ["Pago", "Em produção", "Enviado", "Entregue"]
 
 MODELO_PADRAO = (
     "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/"
@@ -127,6 +132,7 @@ COLUNAS_PEDIDOS = [
     "nf_status", "nf_numero", "nf_chave", "nf_link",
     "ent_rua", "ent_numero", "ent_complemento", "ent_bairro",
     "ent_cidade", "ent_uf", "ent_cep", "ent_peso", "personalizacao",
+    "itens_json", "estoque_baixado",
 ]
 COLUNAS_CLIQUES = ["data", "evento", "categoria", "produto"]
 
@@ -163,6 +169,35 @@ MOLDES_IMPRESSAO = {
     "Chaveiro (5 x 5 cm)": (5.0, 5.0),
     "Tamanho livre": (10.0, 10.0),
 }
+# ---------------------------------------------------------------
+# Equipe da mini fábrica (você troca pelos nomes reais no painel, em Empresa ao vivo)
+# ---------------------------------------------------------------
+SETORES = ["Diretoria", "Atendimento", "Produção", "Estoque", "Expedição", "Entrega"]
+TONS_PELE = {"Muito clara": "#FBE0CF", "Clara": "#F1C7A8", "Média": "#E0AC88",
+             "Morena": "#C68642", "Negra": "#8D5524"}
+CORES_CABELO = {"Preto": "#1a1a1a", "Castanho": "#5a3214", "Loiro": "#d4a64a",
+                "Ruivo": "#a3401a", "Grisalho": "#9ca3af"}
+ESTILOS_CABELO = ["Curto", "Longo", "Coque", "Rabo de cavalo", "Careca", "Boné"]
+EQUIPE_PADRAO = [
+    {"nome": "Diretor(a)", "cargo": "Diretor(a)", "setor": "Diretoria", "pele": "Média",
+     "cabelo": "Grisalho", "estilo": "Curto", "camisa": "#1e293b", "ativo": True},
+    {"nome": "Ana", "cargo": "Atendente", "setor": "Atendimento", "pele": "Clara",
+     "cabelo": "Castanho", "estilo": "Longo", "camisa": "#db2777", "ativo": True},
+    {"nome": "Bruno", "cargo": "Atendente", "setor": "Atendimento", "pele": "Negra",
+     "cabelo": "Preto", "estilo": "Curto", "camisa": "#9333ea", "ativo": True},
+    {"nome": "Carla", "cargo": "Impressão e sublimação", "setor": "Produção", "pele": "Morena",
+     "cabelo": "Preto", "estilo": "Coque", "camisa": "#059669", "ativo": True},
+    {"nome": "Diego", "cargo": "Prensa térmica", "setor": "Produção", "pele": "Clara",
+     "cabelo": "Loiro", "estilo": "Boné", "camisa": "#0d9488", "ativo": True},
+    {"nome": "Elisa", "cargo": "Canecas e copos", "setor": "Produção", "pele": "Média",
+     "cabelo": "Ruivo", "estilo": "Rabo de cavalo", "camisa": "#10b981", "ativo": True},
+    {"nome": "Fábio", "cargo": "Estoquista", "setor": "Estoque", "pele": "Negra",
+     "cabelo": "Preto", "estilo": "Careca", "camisa": "#ea580c", "ativo": True},
+    {"nome": "Gabi", "cargo": "Embalagem", "setor": "Expedição", "pele": "Muito clara",
+     "cabelo": "Castanho", "estilo": "Rabo de cavalo", "camisa": "#2563eb", "ativo": True},
+    {"nome": "Hugo", "cargo": "Motorista", "setor": "Entrega", "pele": "Morena",
+     "cabelo": "Preto", "estilo": "Boné", "camisa": "#65a30d", "ativo": True},
+]
 # ---------------------------------------------------------------
 # Dados iniciais de exemplo (você edita tudo depois no painel)
 # ---------------------------------------------------------------
@@ -287,8 +322,16 @@ def _crc16(texto: str) -> str:
     return f"{crc:04X}"
 
 
+def _sem_acento(texto: str) -> str:
+    """O Pix só aceita letras sem acento no nome e na cidade (São Paulo vira SAO PAULO)."""
+    import unicodedata
+    limpo = unicodedata.normalize("NFKD", str(texto)).encode("ascii", "ignore").decode("ascii")
+    return limpo.upper().strip()
+
+
 def codigo_pix(chave: str, nome: str, cidade: str, valor: float, txid: str = "***") -> str:
     """Gera o Pix Copia e Cola no padrão do Banco Central."""
+    nome, cidade, chave = _sem_acento(nome), _sem_acento(cidade), str(chave).strip()
     conta = _campo_pix("00", "BR.GOV.BCB.PIX") + _campo_pix("01", chave)
     txid = "".join(c for c in txid if c.isalnum())[:25] or "***"
     corpo = (_campo_pix("00", "01") + _campo_pix("26", conta)
@@ -420,6 +463,21 @@ st.markdown(f"""
              font-weight: 700; background: #fee2e2; color: #991b1b; }}
     .selo-ok {{ background: #dcfce7; color: #166534; }}
     .selo-promo {{ background: #fef3c7; color: #92400e; }}
+    /* Foto clicável: um botão invisível cobre a foto inteira */
+    [class*="st-key-fc_"] {{ position: relative; gap: 0 !important; }}
+    [class*="st-key-fcb_"] {{ position: absolute !important; top: 0; left: 0; right: 0; bottom: 0;
+        z-index: 3; margin: 0 !important; width: 100% !important; height: 100% !important; }}
+    [class*="st-key-fcb_"] .stButton, [class*="st-key-fcb_"] .stButton > button {{
+        width: 100% !important; height: 100% !important; min-height: 100% !important; }}
+    [class*="st-key-fcb_"] .stButton > button {{ opacity: 0 !important; cursor: zoom-in !important; }}
+    [class*="st-key-fc_"] img {{ transition: transform .35s ease; }}
+    [class*="st-key-fc_"]:hover img {{ transform: scale(1.12) !important; }}
+    [class*="st-key-fc_"]:hover .foto-dica {{ opacity: 1; }}
+    .foto-dica {{ position: absolute; left: 8px; bottom: 8px; background: rgba(17,24,39,.75); color: #fff !important;
+        font-size: .75rem; padding: 2px 8px; border-radius: 999px; opacity: 0; transition: opacity .2s; pointer-events: none; }}
+    /* Botões escondidos que a mini fábrica aperta sozinha */
+    .st-key-mc_ocultos, .st-key-mc_host {{ position: absolute !important; width: 1px !important; height: 0 !important;
+        overflow: hidden !important; opacity: 0 !important; pointer-events: none !important; }}
     .btn-top {{
         position: fixed; bottom: 20px; right: 20px; background-color: {COR}; color: #ffffff !important;
         padding: 10px 15px; border-radius: 50px; text-decoration: none; font-weight: bold;
@@ -457,18 +515,31 @@ def url_segura(url: str, categoria: str, rotulo: str = "") -> str:
     return url if url else imagem_reserva(categoria, rotulo)
 
 
-def mostrar_imagem(url: str, categoria: str, rotulo: str = "", classe: str = ""):
-    """Foto com zoom ao passar o mouse. Link vazio ou quebrado vira o desenho de reserva."""
+def html_imagem(url: str, categoria: str, rotulo: str = "", classe: str = "", zoom: bool = True,
+                dica: str = "") -> str:
+    """Monta a foto em HTML. Link vazio ou quebrado vira o desenho de reserva."""
     reserva = imagem_reserva(categoria, rotulo)
     estilo = ("" if classe else "width:100%;aspect-ratio:4/3;object-fit:cover;display:block;")
-    st.markdown(
-        '<div style="overflow:hidden;border-radius:10px;cursor:zoom-in;">'
-        f'<img class="{classe}" src="{html.escape(url_segura(url, categoria, rotulo), quote=True)}" '
-        f'onerror="this.onerror=null;this.src=\'{reserva}\';" '
-        f'style="{estilo}transition:transform 0.35s ease;" '
-        'onmouseover="this.style.transform=\'scale(1.25)\'" '
-        'onmouseout="this.style.transform=\'scale(1)\'"></div>',
-        unsafe_allow_html=True)
+    mouse = ('onmouseover="this.style.transform=\'scale(1.25)\'" '
+             'onmouseout="this.style.transform=\'scale(1)\'"') if zoom else ""
+    etiqueta = f"<span class='foto-dica'>{html.escape(dica)}</span>" if dica else ""
+    return ('<div style="overflow:hidden;border-radius:10px;cursor:zoom-in;position:relative;">'
+            f'<img class="{classe}" src="{html.escape(url_segura(url, categoria, rotulo), quote=True)}" '
+            f'onerror="this.onerror=null;this.src=\'{reserva}\';" '
+            f'style="{estilo}transition:transform 0.35s ease;" {mouse}>{etiqueta}</div>')
+
+
+def mostrar_imagem(url: str, categoria: str, rotulo: str = "", classe: str = ""):
+    """Foto com zoom ao passar o mouse."""
+    st.markdown(html_imagem(url, categoria, rotulo, classe), unsafe_allow_html=True)
+
+
+def area_clicavel(chave: str, conteudo_html: str, on_click=None, args=None, dica: str = "Abrir") -> bool:
+    """Deixa uma foto inteira clicável (um botão invisível fica por cima dela)."""
+    chave = "".join(c if c.isalnum() or c in "_-" else "_" for c in chave)
+    with st.container(key=f"fc_{chave}"):
+        st.markdown(conteudo_html, unsafe_allow_html=True)
+        return st.button(dica, key=f"fcb_{chave}", on_click=on_click, args=args or (), help=dica)
 # ===============================================================
 # BANCO DE DADOS (arquivos CSV locais)
 # ===============================================================
@@ -658,6 +729,63 @@ def baixar_estoque(carrinho: list, id_pedido: str):
         pass  # o pedido nunca falha por causa do estoque
 
 
+def registrar_status(id_pedido: str, status: str):
+    """Guarda cada mudança de situação do pedido (a mini fábrica usa para medir o rendimento)."""
+    try:
+        hist = ler_csv(ARQ_HIST, COL_HIST)
+        novo = pd.DataFrame([{"data": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                              "id_pedido": id_pedido, "status": status}])
+        gravar_csv(ARQ_HIST, pd.concat([hist, novo], ignore_index=True))
+    except Exception:
+        pass
+
+
+def itens_do_pedido(p) -> list:
+    """Devolve os itens do pedido como lista [{categoria, nome, quantidade}]."""
+    try:
+        lista = json.loads(p.get("itens_json") or "[]")
+        if lista:
+            return lista
+    except Exception:
+        pass
+    import re
+    catalogo = globals().get("CATALOGO", {})
+    nomes = {it["nome"]: cat for cat, d in catalogo.items() for it in d["itens"]}
+    lista = []
+    texto = str(p.get("itens", "")).split(" | Frete")[0]
+    for parte in texto.split(";"):
+        m = re.match(r"\s*-?\s*(\d+)x\s+(.+?)(?:\s\(\+|\s\[|\s\(R\$|$)", parte.strip())
+        if m:
+            nome = m.group(2).strip()
+            base = nome.split(" (")[0]
+            lista.append({"categoria": nomes.get(base, nomes.get(nome, "")), "nome": nome,
+                          "quantidade": int(m.group(1))})
+    return lista
+
+
+def baixar_estoque_pedido(id_pedido: str):
+    """Tira do estoque o material do pedido, uma vez só, quando o diretor autoriza."""
+    try:
+        ped = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
+        alvo = ped["id_pedido"] == id_pedido
+        if not alvo.any() or ped.loc[alvo, "estoque_baixado"].iloc[0] == "sim":
+            return
+        baixar_estoque(itens_do_pedido(ped[alvo].iloc[0]), id_pedido)
+        ped.loc[alvo, "estoque_baixado"] = "sim"
+        gravar_csv(ARQ_PEDIDOS, ped)
+    except Exception:
+        pass
+
+
+def depois_de_mudar_status(id_pedido: str, antigo: str, novo: str):
+    """Tudo o que acontece sozinho quando um pedido muda de situação."""
+    if antigo == novo:
+        return
+    registrar_status(id_pedido, novo)
+    if novo in STATUS_COM_MATERIAL:
+        baixar_estoque_pedido(id_pedido)
+
+
 def analise_estoque(margem_dias: int = 7) -> pd.DataFrame:
     """Calcula o consumo por dia, quantos dias o estoque ainda dura e quando pedir ao fornecedor."""
     est = ler_csv(ARQ_ESTOQUE, COL_EST)
@@ -717,7 +845,8 @@ def salvar_artes(id_pedido: str) -> str:
                 f.write(dados)
         lista.append({"item": item["nome"], "quantidade": item["quantidade"], "arquivo": caminho,
                       "texto": p.get("texto", ""), "fonte": p.get("fonte", ""), "cor_texto": p.get("cor_texto", ""),
-                      "obs": p.get("obs", ""), "escala": p.get("escala", 100), "arte_nome": p.get("arte_nome", "")})
+                      "obs": p.get("obs", ""), "escala": p.get("escala", 100), "arte_nome": p.get("arte_nome", ""),
+                      "dx": p.get("dx", 0), "dy": p.get("dy", 0)})
     return json.dumps(lista, ensure_ascii=False) if lista else ""
 
 
@@ -731,7 +860,9 @@ def registrar_pedido(nome: str, telefone: str, email: str, itens_txt: str, total
         endereco += f" - {frete.get('cidade', '')}/{frete.get('uf', '')} CEP {frete.get('cep', '')}"
 
     pedidos = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
-    id_pedido = f"PED-{len(pedidos) + 1:05d}"
+    numeros = pd.to_numeric(pedidos["id_pedido"].astype(str).str.replace("PED-", "", regex=False),
+                            errors="coerce").dropna()
+    id_pedido = f"PED-{int(numeros.max() if len(numeros) else 0) + 1:05d}"
     novo = pd.DataFrame([{
         "data": agora, "nome": nome, "telefone": telefone, "email": email,
         "itens": itens_txt, "total": round(total, 2), "id_pedido": id_pedido,
@@ -744,9 +875,14 @@ def registrar_pedido(nome: str, telefone: str, email: str, itens_txt: str, total
         "ent_complemento": st.session_state.get("cli_comp", "").strip(), "ent_bairro": frete.get("bairro", ""),
         "ent_cidade": frete.get("cidade", ""), "ent_uf": frete.get("uf", ""), "ent_cep": frete.get("cep", ""),
         "ent_peso": "", "personalizacao": salvar_artes(id_pedido),
+        "itens_json": json.dumps([{"categoria": i.get("categoria", ""), "nome": i["nome"],
+                                   "quantidade": i["quantidade"]}
+                                  for i in st.session_state.get("carrinho", [])], ensure_ascii=False),
+        "estoque_baixado": "",
     }])
     gravar_csv(ARQ_PEDIDOS, pd.concat([pedidos, novo], ignore_index=True))
-    baixar_estoque(st.session_state.get("carrinho", []), id_pedido)
+    registrar_status(id_pedido, "Novo")
+    # O estoque agora só baixa quando o diretor autoriza o pedido (veja depois_de_mudar_status)
 
     clientes = ler_csv(ARQ_CLIENTES, COLUNAS_CLIENTES)
     existente = clientes[clientes["telefone"].astype(str) == telefone]
@@ -824,24 +960,40 @@ def adicionar_ao_carrinho(item: dict, quantidade: int, variacao: str = "", perso
     })
 
 
+def marcar_origem(k: str, origem: str):
+    """Lembra se o cliente usou por último a foto dele ou uma arte pronta."""
+    st.session_state[f"porigem_{k}"] = origem
+
+
+def arte_escolhida(k: str) -> tuple:
+    """Devolve (imagem, nome) da arte que vale agora: a última que o cliente escolheu."""
+    arq = st.session_state.get(f"arte_{k}")
+    foto = ""
+    if arq is not None and arq.size <= 3 * 1024 * 1024:
+        foto = f"data:{arq.type or 'image/png'};base64," + base64.b64encode(arq.getvalue()).decode()
+    gal_id = st.session_state.get(f"pgal_{k}")
+    gal = next((a for a in lista_artes() if a["id"] == gal_id), None) if gal_id else None
+    usar_galeria = gal and (not foto or st.session_state.get(f"porigem_{k}") == "galeria")
+    if usar_galeria:
+        return gal["imagem"], "Arte pronta: " + gal["nome"]
+    if foto:
+        return foto, "Foto enviada pelo cliente"
+    return "", ""
+
+
 def coletar_perso(item: dict) -> dict:
     """Pega a foto, o texto e as observações que o cliente colocou na janela do produto."""
     k = item["id"]
-    arq = st.session_state.get(f"arte_{k}")
     perso = {"texto": st.session_state.get(f"ptxt_{k}", "").strip(),
              "fonte": st.session_state.get(f"pfonte_{k}", "Padrão"),
              "cor_texto": st.session_state.get(f"pcor_{k}", "#000000"),
              "obs": st.session_state.get(f"pobs_{k}", "").strip(),
-             "escala": st.session_state.get(f"pesc_{k}", 100), "arte": ""}
-    gal = st.session_state.get(f"pgal_{k}")
-    if gal:
-        escolhida = next((a for a in lista_artes() if a["id"] == gal), None)
-        if escolhida:
-            perso["arte"] = escolhida["imagem"]
-            perso["arte_nome"] = "Arte pronta: " + escolhida["nome"]
-    if arq is not None and arq.size <= 3 * 1024 * 1024:
-        perso["arte_nome"] = "Foto enviada pelo cliente"
-        perso["arte"] = f"data:{arq.type or 'image/png'};base64," + base64.b64encode(arq.getvalue()).decode()
+             "escala": st.session_state.get(f"pesc_{k}", 100),
+             "dx": st.session_state.get(f"pdx_{k}", 0), "dy": st.session_state.get(f"pdy_{k}", 0),
+             "arte": ""}
+    perso["arte"], nome_arte = arte_escolhida(k)
+    if nome_arte:
+        perso["arte_nome"] = nome_arte
     return perso if (perso["arte"] or perso["texto"] or perso["obs"]) else {}
 
 
@@ -919,7 +1071,8 @@ def finalizar_pedido():
     for i in st.session_state.carrinho:
         extra = f" (+{i['unidades_gratis']} brinde)" if i["unidades_gratis"] > 0 else ""
         if i.get("perso"):
-            extra += " [personalizado: " + " | ".join(x for x in [i["perso"].get("arte_nome", ""),
+            # " / " e não " | ": o "|" separa o frete e cortava os itens na etiqueta e na declaração
+            extra += " [personalizado: " + " / ".join(x for x in [i["perso"].get("arte_nome", ""),
                                                               i["perso"].get("texto", "")] if x) + "]"
         linhas.append(f"- {i['quantidade']}x {i['nome']}{extra} (R$ {i['subtotal']:.2f})")
 
@@ -996,14 +1149,13 @@ def abrir_produto(item: dict):
     registrar_clique("ver_de_perto", item["categoria"], item["nome"])
     esq, dir_ = st.columns([1.15, 1])
     with esq:
-        modo = st.radio("Ver como", ["🔍 Foto ampliada", "🔄 Modelo 3D"], horizontal=True,
-                        key=f"modo_ver_{item['id']}", label_visibility="collapsed")
-        if modo.startswith("🔍"):
-            mockup = mockup_perso(item)
-            if mockup:
-                st.markdown(mockup, unsafe_allow_html=True)
-            else:
-                foto_com_lupa(item)
+        modo = st.radio("Ver como", ["🎨 Como fica a minha arte", "🔍 Foto ampliada", "🔄 Modelo 3D"],
+                        horizontal=True, key=f"modo_ver_{item['id']}", label_visibility="collapsed")
+        if modo.startswith("🎨"):
+            components.html(mockup_perso(item), height=450)
+            st.caption("Escolha uma arte aqui embaixo ou envie a sua foto. A prévia muda na hora.")
+        elif modo.startswith("🔍"):
+            foto_com_lupa(item)
             st.caption("Passe o mouse sobre a foto para ver os detalhes.")
         else:
             renderizar_visualizador_3d(item, height=430)
@@ -1033,12 +1185,16 @@ def abrir_produto(item: dict):
             st.radio("Tamanho / tipo", item["variacoes"], key=f"var_{item['id']}", horizontal=True)
         st.markdown("**🎨 Personalize do seu jeito**")
         k = item["id"]
-        st.file_uploader("Ou envie a sua foto ou arte (até 3 MB)", type=["png", "jpg", "jpeg", "webp"], key=f"arte_{k}")
+        st.file_uploader("Ou envie a sua foto ou arte (até 3 MB)", type=["png", "jpg", "jpeg", "webp"],
+                         key=f"arte_{k}", on_change=marcar_origem, args=(k, "upload"))
         st.text_input("Texto ou nome na peça (opcional)", key=f"ptxt_{k}")
         f1, f2 = st.columns(2)
         f1.selectbox("Estilo da letra", FONTES_PERSO, key=f"pfonte_{k}")
         f2.color_picker("Cor do texto", "#000000", key=f"pcor_{k}")
         st.slider("Tamanho da arte na peça (%)", 30, 100, 100, step=5, key=f"pesc_{k}")
+        g1, g2 = st.columns(2)
+        g1.slider("Mover ⬅️ ➡️", -100, 100, 0, step=10, key=f"pdx_{k}")
+        g2.slider("Mover ⬆️ ⬇️", -100, 100, 0, step=10, key=f"pdy_{k}")
         st.text_area("Como você quer? (posição, cores, detalhes)", key=f"pobs_{k}", height=70)
         arq = st.session_state.get(f"arte_{k}")
         if arq is not None and arq.size > 3 * 1024 * 1024:
@@ -1130,58 +1286,164 @@ def escolher_arte(chave: str, arte_id):
     st.session_state[chave] = arte_id
 
 
+def escolher_arte_galeria(k: str, arte_id: str):
+    """O cliente clicou numa arte pronta: ela vai para a prévia na hora."""
+    st.session_state[f"pgal_{k}"] = arte_id
+    marcar_origem(k, "galeria")
+    st.session_state[f"modo_ver_{k}"] = "🎨 Como fica a minha arte"
+
+
 def grade_artes(item: dict):
     k = item["id"]
     artes = lista_artes(item["categoria"])
-    st.markdown("**🎨 Escolha uma arte pronta**")
+    st.markdown("**🎨 Escolha uma arte pronta** (clique na imagem)")
     if not ARTES_PRONTAS:
         st.caption("Exemplos provisórios. Cadastre as suas em Galeria de artes, no painel.")
     escolhida = st.session_state.get(f"pgal_{k}")
-    with st.container(height=330, border=True):
-        for ini in range(0, len(artes), 5):
-            for c, a in zip(st.columns(5), artes[ini:ini + 5]):
+    with st.container(height=340, border=True):
+        for ini in range(0, len(artes), 4):
+            for c, a in zip(st.columns(4), artes[ini:ini + 4]):
                 with c:
                     marcada = escolhida == a["id"]
                     borda = "3px solid #7c3aed" if marcada else "1px solid #d1d5db"
-                    st.markdown(f"<img src='{html.escape(a['imagem'], quote=True)}' style='width:100%;"
-                                f"aspect-ratio:1/1;object-fit:cover;border-radius:8px;border:{borda};'>",
-                                unsafe_allow_html=True)
-                    st.button(("✅ " if marcada else "") + a["nome"][:12], key=f"gal_{k}_{a['id']}",
-                              use_container_width=True, type="primary" if marcada else "secondary",
-                              on_click=escolher_arte, args=(f"pgal_{k}", a["id"]))
+                    area_clicavel(
+                        f"g{k}_{a['id']}",
+                        f"<div style='overflow:hidden;border-radius:8px;border:{borda};'>"
+                        f"<img src='{html.escape(a['imagem'], quote=True)}' style='width:100%;aspect-ratio:1/1;"
+                        "object-fit:cover;display:block;'></div>",
+                        on_click=escolher_arte_galeria, args=(k, a["id"]), dica="Usar esta arte")
+                    st.caption(("✅ " if marcada else "") + a["nome"][:16])
     if escolhida:
         nome_sel = next((a["nome"] for a in artes if a["id"] == escolhida), "")
         st.success(f"✅ Arte escolhida: {nome_sel}. Ela vai junto com o pedido.")
         st.button("✖ Tirar a arte escolhida", key=f"galx_{k}", on_click=escolher_arte, args=(f"pgal_{k}", None))
 
 
+def tipo_peca(texto: str) -> str:
+    """Descobre o formato da peça pelo nome da categoria ou do produto."""
+    t = str(texto).lower()
+    for chave, tipo in [("canec", "caneca"), ("copo", "copo"), ("térm", "copo"), ("termic", "copo"),
+                        ("garraf", "copo"), ("camis", "camiseta"), ("bon", "bone"), ("chav", "chaveiro"),
+                        ("almof", "almofada"), ("mate", "mateira")]:
+        if chave in t:
+            return tipo
+    return "quadro"
+
+
+# Cada peça: (desenho de trás, área de impressão x/y/largura/altura, recorte da área, sombras por cima)
+_CIL = ("<linearGradient id='cil' x1='0' x2='1'><stop offset='0' stop-color='#000' stop-opacity='.20'/>"
+        "<stop offset='.18' stop-color='#000' stop-opacity='0'/><stop offset='.33' stop-color='#fff' stop-opacity='.45'/>"
+        "<stop offset='.5' stop-color='#fff' stop-opacity='0'/><stop offset='.85' stop-color='#000' stop-opacity='.06'/>"
+        "<stop offset='1' stop-color='#000' stop-opacity='.24'/></linearGradient>")
+PECAS_MOCKUP = {
+    "caneca": (
+        "<ellipse cx='190' cy='344' rx='112' ry='14' fill='#000' opacity='.12'/>"
+        "<path d='M283 140 q72 0 72 76 q0 76 -72 76' stroke='#d1d5db' stroke-width='24' fill='none'/>"
+        "<path d='M283 140 q72 0 72 76 q0 76 -72 76' stroke='#f9fafb' stroke-width='15' fill='none'/>"
+        "<rect x='95' y='95' width='190' height='247' rx='16' fill='#fff' stroke='#d1d5db' stroke-width='2'/>",
+        (112, 130, 156, 185), "<rect x='112' y='130' width='156' height='185'/>",
+        "<rect x='95' y='95' width='190' height='247' rx='16' fill='url(#cil)'/>"
+        "<ellipse cx='190' cy='97' rx='95' ry='14' fill='#f3f4f6' stroke='#d1d5db' stroke-width='2'/>"
+        "<ellipse cx='190' cy='99' rx='84' ry='9' fill='#e5e7eb'/>"),
+    "copo": (
+        "<ellipse cx='200' cy='350' rx='80' ry='11' fill='#000' opacity='.12'/>"
+        "<path d='M118 92 h164 l-20 250 q-62 10 -124 0z' fill='#eef2f7' stroke='#9ca3af' stroke-width='2'/>",
+        (140, 125, 120, 180), "<path d='M118 92 h164 l-20 250 q-62 10 -124 0z'/>",
+        "<path d='M118 92 h164 l-20 250 q-62 10 -124 0z' fill='url(#cil)'/>"
+        "<rect x='110' y='66' width='180' height='30' rx='9' fill='#334155'/>"
+        "<rect x='170' y='58' width='60' height='12' rx='5' fill='#1f2937'/>"),
+    "camiseta": (
+        "<path d='M135 58 q65 30 130 0 l78 36 l-27 72 l-36 -15 v222 h-160 v-222 l-36 15 l-27 -72z' "
+        "fill='#fff' stroke='#d1d5db' stroke-width='2'/>",
+        (142, 105, 116, 160), "<rect x='142' y='105' width='116' height='160'/>",
+        "<path d='M165 60 q35 26 70 0' stroke='#d1d5db' stroke-width='7' fill='none'/>"
+        "<path d='M150 300 q20 -60 5 -150 M250 300 q-15 -70 0 -150' stroke='#000' stroke-opacity='.05' stroke-width='10' fill='none'/>"
+        "<path d='M135 58 q65 30 130 0 l78 36 l-27 72 l-36 -15 v222 h-160 v-222 l-36 15 l-27 -72z' fill='url(#tecido)'/>"),
+    "bone": (
+        "<ellipse cx='200' cy='300' rx='150' ry='14' fill='#000' opacity='.10'/>"
+        "<path d='M95 250 q0 -142 105 -142 q105 0 105 142z' fill='#fff' stroke='#d1d5db' stroke-width='2'/>",
+        (140, 150, 120, 85), "<path d='M95 250 q0 -142 105 -142 q105 0 105 142z'/>",
+        "<path d='M95 250 q0 -142 105 -142 q105 0 105 142z' fill='url(#cil)'/>"
+        "<path d='M200 108 v142' stroke='#e5e7eb' stroke-width='2'/>"
+        "<path d='M58 252 q142 -26 284 0 q-12 42 -142 42 q-130 0 -142 -42z' fill='#e5e7eb' stroke='#cbd5e1' stroke-width='2'/>"
+        "<circle cx='200' cy='108' r='7' fill='#e5e7eb'/>"),
+    "chaveiro": (
+        "<circle cx='200' cy='82' r='28' stroke='#9ca3af' stroke-width='7' fill='none'/>"
+        "<rect x='193' y='104' width='14' height='22' rx='4' fill='#9ca3af'/>"
+        "<rect x='115' y='120' width='170' height='205' rx='40' fill='#fff' stroke='#cbd5e1' stroke-width='3'/>",
+        (130, 136, 140, 172), "<rect x='130' y='136' width='140' height='172' rx='32'/>",
+        "<path d='M135 150 q20 -20 60 -22' stroke='#fff' stroke-width='8' stroke-linecap='round' opacity='.8' fill='none'/>"),
+    "almofada": (
+        "<path d='M70 80 q130 -26 260 0 q26 120 0 240 q-130 26 -260 0 q-26 -120 0 -240z' fill='#fff' "
+        "stroke='#d1d5db' stroke-width='2'/>",
+        (92, 98, 216, 204), "<path d='M70 80 q130 -26 260 0 q26 120 0 240 q-130 26 -260 0 q-26 -120 0 -240z'/>",
+        "<path d='M70 80 q130 -26 260 0 q26 120 0 240 q-130 26 -260 0 q-26 -120 0 -240z' fill='url(#fofo)'/>"),
+    "mateira": (
+        "<path d='M150 95 q50 -70 100 0' stroke='#78350f' stroke-width='10' fill='none'/>"
+        "<rect x='118' y='90' width='164' height='252' rx='26' fill='#92400e' stroke='#78350f' stroke-width='3'/>"
+        "<rect x='140' y='140' width='120' height='150' rx='10' fill='#fef3c7'/>",
+        (140, 140, 120, 150), "<rect x='140' y='140' width='120' height='150' rx='10'/>",
+        "<rect x='118' y='90' width='164' height='252' rx='26' fill='url(#cil)'/>"
+        "<path d='M128 110 v220 M272 110 v220' stroke='#fbbf24' stroke-dasharray='6 5' stroke-width='2'/>"),
+    "quadro": (
+        "<rect x='66' y='66' width='268' height='268' fill='#fff' stroke='#94a3b8' stroke-width='12'/>",
+        (90, 90, 220, 220), "<rect x='90' y='90' width='220' height='220'/>", ""),
+}
+
+
+def html_mockup(tipo: str, src: str, texto: str, fonte: str, cor: str, escala: int, dx: int, dy: int,
+                nome: str = "", altura: int = 430) -> str:
+    """Desenha a peça com a arte do cliente por cima, na área de impressão."""
+    fundo, (ax, ay, aw, ah), recorte, sombra = PECAS_MOCKUP.get(tipo, PECAS_MOCKUP["quadro"])
+    e = max(30, min(100, int(escala or 100))) / 100
+    cx = ax + aw / 2 + (dx or 0) / 100 * aw / 2
+    cy = ay + ah / 2 + (dy or 0) / 100 * ah / 2
+    texto = str(texto or "")
+    fs = max(12.0, min(34.0, aw / max(4, len(texto)) * 1.7)) if texto else 0
+    iw, ih = aw * e, ah * e * (0.72 if texto else 1)
+    miolo = ""
+    if src:
+        topo = cy - ih / 2 - (fs * 0.6 if texto else 0)
+        miolo += (f"<image href='{html.escape(src, quote=True)}' x='{cx - iw / 2:.1f}' y='{topo:.1f}' "
+                  f"width='{iw:.1f}' height='{ih:.1f}' preserveAspectRatio='xMidYMid meet' "
+                  "style='mix-blend-mode:multiply'/>")
+    if texto:
+        ty = (cy + ih / 2 + fs * 0.5) if src else (cy + fs / 3)
+        miolo += (f"<text x='{cx:.1f}' y='{ty:.1f}' text-anchor='middle' font-size='{fs:.1f}' font-weight='700' "
+                  f"fill='{html.escape(cor or '#000', quote=True)}' "
+                  f"style=\"font-family:{CSS_FONTES.get(fonte, 'Arial')}\">{html.escape(texto)}</text>")
+    if not miolo:
+        miolo = (f"<rect x='{ax + 4}' y='{ay + 4}' width='{aw - 8}' height='{ah - 8}' rx='8' fill='none' "
+                 "stroke='#94a3b8' stroke-width='2' stroke-dasharray='8 6'/>"
+                 f"<text x='{ax + aw / 2}' y='{ay + ah / 2}' text-anchor='middle' font-size='15' fill='#64748b' "
+                 "font-family='Arial'>Sua arte aqui</text>"
+                 f"<text x='{ax + aw / 2}' y='{ay + ah / 2 + 20}' text-anchor='middle' font-size='11' fill='#94a3b8' "
+                 "font-family='Arial'>escolha ou envie uma imagem</text>")
+    defs = (_CIL + "<linearGradient id='tecido' x1='0' x2='0' y1='0' y2='1'><stop offset='0' stop-color='#000' "
+            "stop-opacity='0'/><stop offset='1' stop-color='#000' stop-opacity='.10'/></linearGradient>"
+            "<radialGradient id='fofo' cx='.5' cy='.45' r='.65'><stop offset='.55' stop-color='#000' stop-opacity='0'/>"
+            "<stop offset='1' stop-color='#000' stop-opacity='.22'/></radialGradient>"
+            "<radialGradient id='luz' cx='.5' cy='.35' r='.75'><stop offset='0' stop-color='#ffffff'/>"
+            "<stop offset='1' stop-color='#dbe4f3'/></radialGradient>"
+            f"<clipPath id='area'>{recorte}</clipPath>")
+    return f"""<html><body style="margin:0;font-family:Arial,sans-serif;background:transparent">
+<div style="border-radius:12px;overflow:hidden;border:1px solid #dbe1ea;background:#fff">
+<svg viewBox="0 0 400 400" style="display:block;width:100%;height:{altura - 30}px">
+<defs>{defs}</defs><rect width="400" height="400" fill="url(#luz)"/>
+{fundo}<g clip-path="url(#area)">{miolo}</g>{sombra}</svg>
+<div style="padding:5px 10px;font-size:12px;color:#475569;border-top:1px solid #eef2f7">
+👀 Prévia de como fica{(' · ' + html.escape(nome)) if nome else ''} · as cores reais podem variar um pouco</div>
+</div></body></html>"""
+
+
 def mockup_perso(item: dict) -> str:
-    """Exemplo da peça com a arte escolhida ou a foto enviada, mostrado no lugar da foto grande."""
+    """Prévia da peça com a arte escolhida ou a foto enviada pelo cliente."""
     k = item["id"]
-    src = ""
-    arq = st.session_state.get(f"arte_{k}")
-    if arq is not None and arq.size <= 3 * 1024 * 1024:
-        src = f"data:{arq.type or 'image/png'};base64," + base64.b64encode(arq.getvalue()).decode()
-    elif st.session_state.get(f"pgal_{k}"):
-        src = next((a["imagem"] for a in lista_artes() if a["id"] == st.session_state[f"pgal_{k}"]), "")
-    txt = st.session_state.get(f"ptxt_{k}", "")
-    if not (src or txt):
-        return ""
-    esc = st.session_state.get(f"pesc_{k}", 100)
-    cat = item["categoria"]
-    forma = "3/4" if "Camis" in cat else "1/1" if ("Almof" in cat or "Chav" in cat) else "4/3"
-    raio = "50%" if "Chav" in cat else "18px 18px 40px 40px"
-    fonte = CSS_FONTES.get(st.session_state.get(f"pfonte_{k}", "Padrão"), "Arial")
-    cor_t = st.session_state.get(f"pcor_{k}", "#000000")
-    foto = (f"<img src='{html.escape(src, quote=True)}' style='max-width:{esc}%;"
-            f"max-height:{int(esc * (0.72 if txt else 1))}%;object-fit:contain;'>" if src else "")
-    return ("<div style='width:100%;height:430px;background:#e3eafc;border-radius:12px;display:flex;"
-            "align-items:center;justify-content:center;'>"
-            f"<div style='width:78%;aspect-ratio:{forma};max-height:400px;background:#fff;border:2px solid #cbd5e1;"
-            f"border-radius:{raio};display:flex;flex-direction:column;align-items:center;justify-content:center;"
-            "overflow:hidden;box-shadow:inset -24px 0 30px rgba(0,0,0,.10), 0 10px 24px rgba(0,0,0,.15);'>"
-            f"{foto}<div style='font-family:{fonte};color:{cor_t};font-size:1.6rem;font-weight:700;"
-            f"text-align:center;padding:4px;'>{html.escape(txt)}</div></div></div>")
+    src, _ = arte_escolhida(k)
+    return html_mockup(tipo_peca(item["categoria"] + " " + item["nome"]), src,
+                       st.session_state.get(f"ptxt_{k}", ""), st.session_state.get(f"pfonte_{k}", "Padrão"),
+                       st.session_state.get(f"pcor_{k}", "#000000"), st.session_state.get(f"pesc_{k}", 100),
+                       st.session_state.get(f"pdx_{k}", 0), st.session_state.get(f"pdy_{k}", 0), item["nome"])
 # ===============================================================
 # APRESENTAÇÃO PARA EMPRESAS E VITRINE DE VÍDEOS (usadas no painel e na loja)
 # ===============================================================
@@ -1283,7 +1545,7 @@ import altair as alt
 # ===============================================================
 def html_declaracao(p) -> str:
     """Monta a declaração de conteúdo pronta para imprimir (Ctrl+P)."""
-    itens = [i.strip("- ").strip() for i in str(p["itens"]).split("|")[0].split(";") if i.strip()]
+    itens = [i.strip("- ").strip() for i in str(p["itens"]).split(" | Frete")[0].split(";") if i.strip()]
     linhas = "".join(f"<tr><td>{k}</td><td>{html.escape(i)}</td></tr>" for k, i in enumerate(itens, 1))
     e = lambda v: html.escape(str(v or ""))
     return f"""<html><head><meta charset='utf-8'><title>Declaração {e(p['id_pedido'])}</title>
@@ -1311,7 +1573,8 @@ conteúdo inflamável, explosivo, causador de combustão ou qualquer outro proib
 # ===============================================================
 ARQUIVOS_DADOS = [ARQ_PRODUTOS, ARQ_CLIENTES, ARQ_PEDIDOS, ARQ_FRETE, ARQ_CLIQUES,
                   ARQ_LOJA, ARQ_APRESENTACOES, ARQ_VITRINE, ARQ_ARTES_PRONTAS,
-                  ARQ_FORNECEDORES, ARQ_ESTOQUE, ARQ_COMPRAS, ARQ_MOVIMENTOS, ARQ_PRECOS]
+                  ARQ_FORNECEDORES, ARQ_ESTOQUE, ARQ_COMPRAS, ARQ_MOVIMENTOS, ARQ_PRECOS,
+                  ARQ_EQUIPE, ARQ_HIST]
 
 
 def gerar_backup_zip() -> bytes:
@@ -1342,6 +1605,8 @@ def restaurar_backup_zip(arquivo) -> int:
     restaurados = 0
     with zipfile.ZipFile(arquivo) as z:
         for nome in z.namelist():
+            if nome.startswith(("/", "\\")) or ".." in nome.replace("\\", "/").split("/"):
+                continue  # segurança: não deixa o zip gravar fora da pasta da loja
             if nome in ARQUIVOS_DADOS or (nome.split("/")[0] in (PASTA_VIDEOS, PASTA_ARTES) and not nome.endswith("/")):
                 os.makedirs(os.path.dirname(nome) or ".", exist_ok=True)
                 with open(nome, "wb") as f:
@@ -1351,137 +1616,877 @@ def restaurar_backup_zip(arquivo) -> int:
 
 
 # ===============================================================
-# MINI EMPRESA AO VIVO (maquete animada com a equipe trabalhando)
+# MINI FÁBRICA AO VIVO (prédio com a equipe trabalhando com os dados reais)
 # ===============================================================
-CSS_MINI = """<style>
-@keyframes me-anda {0%,10%{transform:translate(0,0)}45%,55%{transform:translate(78px,0)}90%,100%{transform:translate(0,0)}}
-@keyframes me-papel {0%,50%{opacity:1}51%,100%{opacity:0}}
-@keyframes me-martelo {0%,40%,100%{transform:rotate(-35deg)}50%{transform:rotate(18deg)}}
-@keyframes me-estoque {0%,100%{transform:translateX(0)}50%{transform:translateX(-46px)}}
-@keyframes me-prensa {0%,100%{transform:translateY(0)}50%{transform:translateY(10px)}}
-@keyframes me-esteira {0%{transform:translateX(0);opacity:0}8%{opacity:1}92%{opacity:1}100%{transform:translateX(205px);opacity:0}}
-@keyframes me-saida {0%{transform:translateX(0);opacity:1}75%{transform:translateX(62px);opacity:1}100%{transform:translateX(72px);opacity:0}}
-@keyframes me-balao {0%,100%{opacity:0}25%,75%{opacity:1}}
-@keyframes me-pula {0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
-@keyframes me-rolo {from{stroke-dashoffset:0}to{stroke-dashoffset:-20}}
-.me-ent{animation:me-anda 6s ease-in-out infinite}
-.me-pap{animation:me-papel 6s linear infinite}
-.me-mart{transform-box:fill-box;transform-origin:5% 50%;animation:me-martelo 1.2s ease-in-out infinite}
-.me-est{animation:me-estoque 3.4s ease-in-out infinite}
-.me-pre{animation:me-prensa 1s ease-in-out infinite}
-.me-cx1,.me-cx2,.me-cx3{animation:me-esteira 4.5s linear infinite}
-.me-cx2{animation-delay:1.5s}.me-cx3{animation-delay:3s}
-.me-sai{animation:me-saida 3s ease-in infinite}
-.me-bal{animation:me-balao 2.4s ease-in-out infinite}
-.me-bal2{animation:me-balao 2.4s ease-in-out infinite;animation-delay:1.2s}
-.me-van{animation:me-pula .5s ease-in-out infinite}
-.me-rolo{stroke-dasharray:6 4;animation:me-rolo .6s linear infinite}
-.me-parado,.me-parado *{animation:none !important}
-.me-flut{position:fixed;right:16px;bottom:70px;width:330px;z-index:999999;background:#fff;
-  border:1px solid #d9dfeb;border-radius:14px;box-shadow:0 8px 24px rgba(0,0,0,.18);overflow:hidden}
-.me-flut summary{cursor:pointer;padding:6px 10px;font-weight:700;font-size:.85rem;
-  background:#1d4ed8;color:#fff !important;list-style:none}
-@media (max-width: 700px){.me-flut{width:240px;right:8px;bottom:64px}}
-</style>"""
-
-
-def numeros_mini():
-    """Conta pedidos novos, em produção, enviados e materiais para repor."""
-    ped = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
-    novos = int((ped["status"] == "Novo").sum())
-    prod = int(ped["status"].isin(["Pago", "Em produção"]).sum())
-    envio = int((ped["status"] == "Enviado").sum())
-    an = analise_estoque(int(LOJA.get("estoque_margem_dias", 7)))
-    repor = int((an["repor"] == True).sum()) if len(an) else 0
-    return novos, prod, envio, repor
-
-
-def pessoa(x, y, camisa, classe="", carga="", cabelo="#444441"):
-    """Bonequinho: sombra, corpo, cabeça e cabelo."""
-    return (f"<g class='{classe}'><ellipse cx='{x}' cy='{y + 27}' rx='9' ry='3' fill='#00000022'/>"
-            f"<rect x='{x - 7}' y='{y + 7}' width='14' height='19' rx='6' fill='{camisa}'/>"
-            f"<circle cx='{x}' cy='{y}' r='7' fill='#F5C4B3'/>"
-            f"<path d='M{x - 7} {y - 1} a7 7 0 0 1 14 0 Z' fill='{cabelo}'/>{carga}</g>")
-def svg_mini(novos, prod, envio, repor):
-    """Desenha a empresa: vendas, gerência, estoque, produção com esteira e entrega."""
-    ativo = lambda cond, cls: cls if cond else cls + " me-parado"
-    papel = "<rect class='me-pap' x='103' y='62' width='9' height='11' fill='#fff' stroke='#888780'/>"
-    caixa_est = "<rect x='336' y='70' width='12' height='10' fill='#FAC775' stroke='#854F0B'/>"
-    caneca = "<rect x='168' y='172' width='8' height='9' rx='1' fill='#fff' stroke='#0F6E56'/>"
-    aviso_est = f"⚠️ repor {repor}" if repor else "✅ em dia"
-    return f"""<svg viewBox='0 0 420 260' width='100%' style='display:block;background:#F1EFE8'>
-<rect x='8' y='8' width='128' height='112' rx='6' fill='#FBEAF0'/>
-<text x='14' y='23' font-size='10' font-weight='700' fill='#72243E'>💬 Vendas</text>
-<rect x='18' y='84' width='108' height='12' rx='2' fill='#D4537E'/>
-<rect x='30' y='74' width='18' height='10' fill='#444441'/><rect x='88' y='74' width='18' height='10' fill='#444441'/>
-{pessoa(39, 52, '#993556', cabelo='#633806')}
-<g class='{ativo(True, "me-bal")}'><ellipse cx='58' cy='36' rx='14' ry='8' fill='#fff' stroke='#D4537E'/>
-<text x='58' y='39' font-size='8' text-anchor='middle' fill='#72243E'>R$</text></g>
-{pessoa(97, 52, '#D4537E', ativo(novos, 'me-ent'), papel if novos else '')}
-<rect x='144' y='8' width='132' height='112' rx='6' fill='#E6F1FB'/>
-<text x='150' y='23' font-size='9.5' font-weight='700' fill='#0C447C'>🏢 Gerência · {novos} p/ aprovar</text>
-{pessoa(225, 46, '#26215C', cabelo='#888780')}
-<rect x='190' y='70' width='76' height='16' rx='2' fill='#85B7EB'/>
-<rect x='212' y='74' width='30' height='8' fill='#fff'/>
-<text x='227' y='80.5' font-size='6' text-anchor='middle' fill='#0C447C'>CHEFE</text>
-<g class='{ativo(novos, "me-mart")}'><rect x='246' y='60' width='18' height='3' fill='#854F0B'/>
-<rect x='262' y='55' width='8' height='13' rx='1' fill='#633806'/></g>
-{pessoa(165, 86, '#185FA5', carga="<rect x='171' y='96' width='8' height='10' fill='#fff' stroke='#185FA5'/>")}
-<rect x='284' y='8' width='128' height='112' rx='6' fill='#FAEEDA'/>
-<text x='290' y='23' font-size='10' font-weight='700' fill='#633806'>📦 Estoque · {aviso_est}</text>
-<rect x='352' y='28' width='52' height='84' fill='#BA7517'/>
-<rect x='356' y='34' width='20' height='14' fill='#FAC775'/><rect x='380' y='34' width='20' height='14' fill='#fff'/>
-<rect x='356' y='54' width='20' height='14' fill='#fff'/><rect x='380' y='54' width='20' height='14' fill='#FAC775'/>
-<rect x='356' y='74' width='20' height='14' fill='#FAC775'/><rect x='380' y='74' width='20' height='14' fill='#FAC775'/>
-<rect x='356' y='94' width='44' height='14' fill='#fff'/>
-{pessoa(330, 60, '#639922', ativo(True, 'me-est'), caixa_est)}
-<rect x='8' y='128' width='270' height='124' rx='6' fill='#E1F5EE'/>
-<text x='14' y='143' font-size='10' font-weight='700' fill='#085041'>🔥 Produção · {prod} pedido(s)</text>
-<rect x='86' y='150' width='6' height='56' fill='#0F6E56'/>
-<g class='{ativo(prod, "me-pre")}'><rect x='72' y='168' width='34' height='10' rx='2' fill='#085041'/></g>
-{pessoa(52, 160, '#1D9E75')}
-{pessoa(160, 160, '#0F6E56', carga=caneca)}
-{pessoa(228, 160, '#5DCAA5', cabelo='#633806')}
-<rect x='18' y='206' width='250' height='14' rx='7' fill='#444441'/>
-<line class='{ativo(prod, "me-rolo")}' x1='26' y1='213' x2='260' y2='213' stroke='#B4B2A9' stroke-width='3'/>
-<g class='{ativo(prod, "me-cx1")}'><rect x='22' y='194' width='14' height='12' fill='#FAC775' stroke='#854F0B'/></g>
-<g class='{ativo(prod, "me-cx2")}'><rect x='24' y='195' width='10' height='11' rx='1' fill='#fff' stroke='#0F6E56'/>
-<path d='M34 198 q4 3 0 6' fill='none' stroke='#0F6E56'/></g>
-<g class='{ativo(prod, "me-cx3")}'><rect x='22' y='196' width='14' height='10' rx='2' fill='#7F77DD'/></g>
-<rect x='284' y='128' width='128' height='124' rx='6' fill='#EAF3DE'/>
-<text x='290' y='143' font-size='10' font-weight='700' fill='#27500A'>🚚 Entrega · {envio}</text>
-<rect x='388' y='150' width='18' height='56' fill='#854F0B'/><circle cx='392' cy='180' r='1.5' fill='#FAC775'/>
-{pessoa(320, 158, '#3B6D11')}
-<g class='{ativo(prod or envio, "me-sai")}'><rect x='300' y='194' width='14' height='12' fill='#FAC775' stroke='#854F0B'/></g>
-<g class='{ativo(envio, "me-van")}'><rect x='300' y='222' width='50' height='20' rx='3' fill='#fff' stroke='#3B6D11'/>
-<rect x='340' y='226' width='12' height='10' fill='#B5D4F4'/>
-<text x='320' y='235' font-size='6' text-anchor='middle' fill='#27500A'>ENTREGA</text>
-<circle cx='310' cy='243' r='4' fill='#2C2C2A'/><circle cx='340' cy='243' r='4' fill='#2C2C2A'/></g>
-</svg>"""
-
-
-@st.fragment(run_every=15)
-def cena_ao_vivo(flutuante: bool = False):
-    """Telinha animada. Atualiza sozinha a cada 15 segundos com os pedidos reais."""
-    n, pr, ev, r = numeros_mini()
-    if flutuante:
-        st.markdown(CSS_MINI + "<details class='me-flut' open><summary>🏭 Nossa equipe ao vivo</summary>"
-                    + svg_mini(n, pr, ev, r) + "</details>", unsafe_allow_html=True)
-    else:
-        st.markdown(CSS_MINI + "<div style='border-radius:14px;overflow:hidden;border:1px solid #dbe1ea'>"
-                    + svg_mini(n, pr, ev, r) + "</div>", unsafe_allow_html=True)
-
-
-def decidir_pedido(id_pedido: str, novo_status: str):
-    """O chefe bate o martelo: aprova (vai pra produção) ou recusa."""
-    ped = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
-    ped.loc[ped["id_pedido"] == id_pedido, "status"] = novo_status
-    gravar_csv(ARQ_PEDIDOS, ped)
+NAV_CIDADE = {"resumo": "📊 Resumo", "pedidos": "🧾 Pedidos", "clientes": "👥 Clientes", "artes": "🖨️ Artes",
+              "estoque": "🏭 Estoque e compras", "etiquetas": "🏷️ Etiquetas", "rastreio": "🚚 Rastreio",
+              "ao_vivo": "🏙️ Empresa ao vivo"}
+VERSAO_MOTOR = "mc4"
 
 
 def mudar_status(id_pedido: str, novo_status: str):
-    """Avança o pedido na produção ou na entrega."""
-    decidir_pedido(id_pedido, novo_status)
+    """Muda a situação do pedido e faz o resto sozinho (histórico e baixa do estoque)."""
+    ped = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
+    alvo = ped["id_pedido"] == id_pedido
+    if not alvo.any():
+        return
+    antigo = ped.loc[alvo, "status"].iloc[0]
+    ped.loc[alvo, "status"] = novo_status
+    gravar_csv(ARQ_PEDIDOS, ped)
+    depois_de_mudar_status(id_pedido, antigo, novo_status)
+
+
+def decidir_pedido(id_pedido: str, novo_status: str):
+    """O diretor autoriza (vai para a produção) ou recusa o pedido."""
+    mudar_status(id_pedido, novo_status)
+
+
+def carregar_equipe() -> list:
+    return ler_json(ARQ_EQUIPE, EQUIPE_PADRAO)
+
+
+def _dono(id_pedido, n: int) -> int:
+    """Divide os pedidos entre as pessoas do setor, sempre do mesmo jeito."""
+    if n <= 0:
+        return 0
+    return int("".join(c for c in str(id_pedido) if c.isdigit()) or 0) % n
+
+
+def _espera(dt, agora) -> str:
+    if pd.isna(dt):
+        return "?"
+    horas = int((agora - dt).total_seconds() // 3600)
+    return f"{horas // 24} dia(s)" if horas >= 24 else (f"{horas}h" if horas >= 1 else "menos de 1h")
+
+
+def _atrasado(p, agora) -> bool:
+    if p["status"] in ("Entregue", "Cancelado"):
+        return False
+    try:
+        return datetime.strptime(str(p["previsao_entrega"]).strip(), "%d/%m/%Y").date() < agora.date()
+    except Exception:
+        return bool(pd.notna(p["dt"]) and (agora - p["dt"]).days > 7)
+
+
+def _resumo(p, n: int = 3) -> str:
+    itens = itens_do_pedido(p)
+    if not itens:
+        return str(p["itens"]).split(" | Frete")[0][:80]
+    txt = ", ".join(f"{i['quantidade']}x {i['nome']}" for i in itens[:n])
+    return txt + (f" +{len(itens) - n}" if len(itens) > n else "")
+
+
+def _cor_ok(c: str, padrao: str) -> str:
+    import re
+    return c if re.fullmatch(r"#[0-9a-fA-F]{3,8}", str(c or "")) else padrao
+
+
+def dados_cidade(publico: bool) -> dict:
+    """Junta tudo o que a mini fábrica mostra. Na loja (publico=True) não vai nome, endereço nem valores."""
+    agora = datetime.now()
+    ped = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
+    ped["total_num"] = pd.to_numeric(ped["total"], errors="coerce").fillna(0.0)
+    ped["dt"] = pd.to_datetime(ped["data"], format="%d/%m/%Y %H:%M", errors="coerce")
+    validos = ped[ped["status"] != "Cancelado"]
+    de_hoje = validos[validos["dt"].dt.date == agora.date()]
+    hist = ler_csv(ARQ_HIST, COL_HIST)
+    hist["dt"] = pd.to_datetime(hist["data"], format="%d/%m/%Y %H:%M", errors="coerce")
+    sem = hist[hist["dt"] >= agora - timedelta(days=7)]
+
+    def conta(status, n=0, i=None):
+        h = sem[sem["status"] == status]
+        if i is None or h.empty:
+            return int(len(h))
+        return int(sum(_dono(x, n) == i for x in h["id_pedido"]))
+
+    def cidade(p):
+        return f"{p['ent_cidade']}/{p['ent_uf']}" if str(p["ent_cidade"]).strip() else "cidade a confirmar"
+
+    def quem(p):
+        return "Cliente" if publico else (str(p["nome"]).strip() or "Cliente")
+
+    equipe = [m for m in carregar_equipe() if m.get("ativo", True)]
+    por_setor = {s: [m for m in equipe if m.get("setor") == s] for s in SETORES}
+    n_prod = len(por_setor["Produção"])
+
+    novos_df = ped[ped["status"] == "Novo"].sort_values("dt")
+    novos = [{"id": p["id_pedido"], "nome": quem(p), "total": "" if publico else brl(float(p["total_num"])),
+              "itens": _resumo(p), "espera": _espera(p["dt"], agora), "cidade": cidade(p),
+              "velho": bool(pd.notna(p["dt"]) and (agora - p["dt"]).total_seconds() > 86400)}
+             for _, p in novos_df.head(8).iterrows()]
+    prod_df = ped[ped["status"].isin(["Pago", "Em produção"])].sort_values("dt")
+    producao = []
+    for _, p in prod_df.head(12).iterrows():
+        itens = itens_do_pedido(p)
+        producao.append({"id": p["id_pedido"], "nome": quem(p), "itens": _resumo(p),
+                         "cats": [f"{i.get('categoria', '')} {i.get('nome', '')}" for i in itens[:3]] or [str(p["itens"])],
+                         "atrasado": _atrasado(p, agora), "quem": _dono(p["id_pedido"], n_prod),
+                         "espera": _espera(p["dt"], agora)})
+    env_df = ped[ped["status"] == "Enviado"].sort_values("dt")
+    entregas = []
+    for _, p in env_df.head(6).iterrows():
+        end = ", ".join(str(x) for x in [p["ent_rua"], p["ent_numero"], p["ent_complemento"], p["ent_bairro"]]
+                        if str(x).strip())
+        entregas.append({"id": p["id_pedido"], "nome": quem(p), "itens": _resumo(p), "cidade": cidade(p),
+                         "endereco": "" if publico else (end or p["endereco_entrega"] or "endereço não informado"),
+                         "cep": "" if publico else p["ent_cep"], "transportadora": p["transportadora"] or "a definir",
+                         "codigo": "" if publico else p["codigo_rastreio"], "atrasado": _atrasado(p, agora),
+                         "previsao": p["previsao_entrega"]})
+    sem_codigo = int(((ped["status"] == "Enviado") & (ped["codigo_rastreio"].astype(str).str.strip() == "")).sum())
+    atrasados = int(sum(_atrasado(p, agora) for _, p in validos.iterrows()))
+
+    an = analise_estoque(int(LOJA.get("estoque_margem_dias", 7)))
+    n_repor = int((an["repor"] == True).sum()) if len(an) else 0  # noqa: E712
+    estoque = []
+    for _, r in an.head(8).iterrows():
+        q, mn = float(r["quantidade"]), float(r["minimo"])
+        d = r["dias_restantes"]
+        estoque.append({"material": str(r["material"]), "qtd": f"{q:g}", "unidade": str(r["unidade"] or "un"),
+                        "minimo": f"{mn:g}", "repor": bool(r["repor"]) and not publico, "zerado": q <= 0,
+                        "dias": f"{d:.0f}" if pd.notna(d) else "", "comprar": f"{float(r['comprar']):g}",
+                        "nivel": round(0.0 if q <= 0 else (min(1.0, q / (mn * 3)) if mn > 0 else 1.0), 2),
+                        "fornecedor": "" if publico else str(r["fornecedor"])})
+    repor = [m for m in estoque if m["repor"]]
+
+    pendentes = int(len(validos[(validos["pagamento"] == "Pendente") & (validos["dt"] < agora - timedelta(days=2))]))
+    cli = ler_csv(ARQ_CLIENTES, COLUNAS_CLIENTES)
+    retornos = int(((cli["proximo_contato"] != "") & (cli["proximo_contato"] <= agora.strftime("%Y-%m-%d"))).sum())
+    mov = ler_csv(ARQ_MOVIMENTOS, COL_MOV)
+    movs_7d = int((pd.to_datetime(mov["data"], format="%Y-%m-%d %H:%M", errors="coerce")
+                   >= agora - timedelta(days=7)).sum())
+
+    pessoas = []
+    for setor in SETORES:
+        membros = por_setor[setor]
+        n = len(membros)
+        for i, m in enumerate(membros):
+            estado, acao, fazendo, humor, motivo, rend, ids = "trabalhando", "", "", "feliz", "", "", []
+            if setor == "Diretoria":
+                acao = "lendo" if novos else ""
+                fazendo = (f"Analisando {len(novos_df)} pedido(s) para autorizar" if novos
+                           else "Acompanhando os números no painel da parede")
+                if atrasados:
+                    humor, motivo = "bravo", f"{atrasados} pedido(s) atrasado(s) na empresa"
+                elif any(p["velho"] for p in novos):
+                    humor, motivo = "estressado", "Tem pedido esperando autorização há mais de 1 dia"
+                elif novos:
+                    humor, motivo = "feliz", "Pedidos novos chegando!"
+                else:
+                    humor, motivo = ("feliz", "Dia com vendas") if len(de_hoje) else ("tranquilo", "Tudo em ordem")
+                rend = f"{conta('Em produção')} pedido(s) autorizados em 7 dias"
+                ids = [p["id"] for p in novos]
+            elif setor == "Atendimento":
+                meus = [p for p in novos if _dono(p["id"], n) == i]
+                tarefas = ([f"falando com {len(meus)} cliente(s) novo(s)"] if meus else []) + \
+                          ([f"cobrando {pendentes} pagamento(s) parado(s)"] if pendentes else []) + \
+                          ([f"{retornos} retorno(s) para hoje"] if retornos else [])
+                if tarefas or novos:
+                    acao = "digitando"
+                    fazendo = "No WhatsApp: " + ("; ".join(tarefas) or "acompanhando os pedidos novos")
+                    if pendentes >= 3:
+                        humor, motivo = "bravo", f"Cliente não responde: {pendentes} pagamento(s) parado(s) há mais de 2 dias"
+                    elif pendentes:
+                        humor, motivo = "estressado", "Esperando cliente responder sobre o pagamento"
+                    else:
+                        humor, motivo = "feliz", "Conversando com clientes"
+                else:
+                    estado, fazendo, humor, motivo = "pausa", "Sem mensagens agora, tomando um café", "tranquilo", "Mensagens em dia"
+                criados = validos[validos["dt"] >= agora - timedelta(days=7)]
+                rend = f"{sum(_dono(x, n) == i for x in criados['id_pedido'])} pedido(s) atendidos em 7 dias"
+                ids = [p["id"] for p in meus]
+            elif setor == "Produção":
+                meus = [p for p in producao if p["quem"] == i]
+                if meus:
+                    acao, p0 = "trabalho", meus[0]
+                    fazendo = f"Produzindo {p0['id']}: {p0['itens']}" + (f" (+{len(meus) - 1} na fila)" if len(meus) > 1 else "")
+                    atr = sum(p["atrasado"] for p in meus)
+                    if atr >= 2:
+                        humor, motivo = "bravo", f"{atr} pedidos atrasados na bancada"
+                    elif atr:
+                        humor, motivo = "estressado", "Tem pedido atrasado"
+                    elif len(meus) >= 4:
+                        humor, motivo = "estressado", f"{len(meus)} pedidos na fila"
+                    else:
+                        humor, motivo = "feliz", "Produzindo no ritmo certo"
+                else:
+                    estado, fazendo, humor, motivo = ("pausa", "Sem pedido na produção, foi tomar um café", "tranquilo",
+                                                      "Esperando o diretor autorizar pedidos")
+                rend = f"{conta('Enviado', n, i)} pedido(s) finalizados em 7 dias"
+                ids = [p["id"] for p in meus]
+            elif setor == "Estoque":
+                zerados = [x["material"] for x in estoque if x["zerado"]]
+                if repor:
+                    acao = "carregando"
+                    fazendo = "Conferindo o que falta: " + ", ".join(x["material"] for x in repor[:3])
+                    humor, motivo = (("bravo", "Acabou: " + ", ".join(zerados[:3])) if zerados
+                                     else ("estressado", f"{n_repor} material(is) para repor"))
+                elif producao:
+                    acao, fazendo, humor, motivo = ("carregando", f"Separando material para {len(prod_df)} pedido(s)",
+                                                    "feliz", "Estoque em dia")
+                elif not estoque:
+                    estado, fazendo, humor, motivo = "pausa", "Esperando o cadastro dos materiais", "tranquilo", "Nenhum material cadastrado"
+                else:
+                    estado, fazendo, humor, motivo = "pausa", "Estoque em dia, pausa para o café", "tranquilo", "Nada para repor"
+                rend = f"{movs_7d} movimentação(ões) no estoque em 7 dias"
+            elif setor == "Expedição":
+                if producao or sem_codigo:
+                    acao = "trabalho"
+                    fazendo = "Embalando pedidos" + (f"; {sem_codigo} enviado(s) sem código de rastreio" if sem_codigo else "")
+                    humor, motivo = (("estressado", "Tem pedido enviado sem código de rastreio") if sem_codigo
+                                     else ("feliz", "Caixas saindo"))
+                else:
+                    estado, fazendo, humor, motivo = "pausa", "Nada para embalar agora", "tranquilo", "Esperando a produção"
+                rend = f"{conta('Enviado')} pacote(s) despachados em 7 dias"
+            else:
+                if entregas:
+                    estado, e0 = "dirigindo", entregas[0]
+                    fazendo = f"Na van, levando {e0['id']} para {e0['cidade']}" + (
+                        f" (+{len(env_df) - 1} entrega(s))" if len(env_df) > 1 else "")
+                    atr = sum(e["atrasado"] for e in entregas)
+                    humor, motivo = (("estressado", f"{atr} entrega(s) atrasada(s)") if atr else
+                                     ("estressado", "Muitas entregas hoje") if len(env_df) > 4 else ("feliz", "Pé na estrada"))
+                    ids = [e["id"] for e in entregas]
+                else:
+                    estado, fazendo, humor, motivo = "pausa", "Van na garagem, esperando entregas", "tranquilo", "Nenhum pedido a caminho"
+                rend = f"{conta('Entregue')} entrega(s) concluídas em 7 dias"
+            if publico:  # o cliente vê a equipe sempre de bem e sem dados internos
+                humor, motivo, rend = ("feliz" if estado != "pausa" else "tranquilo"), "", ""
+                fazendo = {"Diretoria": "Conferindo os pedidos", "Atendimento": "Respondendo clientes",
+                           "Estoque": "Organizando o estoque"}.get(setor, fazendo) if estado != "pausa" else "Pausa para o café ☕"
+            pessoas.append({"nome": str(m.get("nome") or setor), "cargo": str(m.get("cargo") or setor), "setor": setor,
+                            "pele": TONS_PELE.get(m.get("pele"), "#E0AC88"),
+                            "cabelo": CORES_CABELO.get(m.get("cabelo"), "#1a1a1a"),
+                            "estilo": m.get("estilo") if m.get("estilo") in ESTILOS_CABELO else "Curto",
+                            "camisa": _cor_ok(m.get("camisa"), "#2563eb"), "estado": estado, "acao": acao,
+                            "fazendo": fazendo, "humor": humor, "motivo": motivo, "rendimento": rend, "ids": ids})
+
+    dias = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
+    semana = []
+    for k in range(6, -1, -1):
+        d = (agora - timedelta(days=k)).date()
+        semana.append({"dia": dias[d.weekday()], "qtd": int((validos["dt"].dt.date == d).sum())})
+    eventos = [f"{h['dt'].strftime('%d/%m %H:%M')} · {h['id_pedido']} → {h['status']}"
+               for _, h in hist.dropna(subset=["dt"]).sort_values("dt").tail(8).iloc[::-1].iterrows()]
+    return {"publico": publico, "empresa": LOJA["nome_empresa"], "cor": _cor_ok(COR, "#1d4ed8"),
+            "numeros": {"hoje": int(len(de_hoje)), "fat": "" if publico else brl(float(de_hoje["total_num"].sum())),
+                        "producao": int(len(prod_df)), "caminho": int(len(env_df)), "entregues": conta("Entregue"),
+                        "novos": int(len(novos_df)), "repor": 0 if publico else n_repor,
+                        "atrasados": 0 if publico else atrasados, "pendentes": 0 if publico else pendentes,
+                        "retornos": 0 if publico else retornos, "sem_codigo": 0 if publico else sem_codigo},
+            "semana": semana, "novos": novos, "producao": producao, "entregas": entregas, "estoque": estoque,
+            "equipe": pessoas, "eventos": eventos}
+
+
+def botoes_ocultos_cidade(d: dict):
+    """Botões invisíveis: a mini fábrica aperta eles quando você clica em Autorizar, Enviar, Entregue..."""
+    acao = None
+    with st.container(key="mc_ocultos"):
+        for p in d["novos"]:
+            if st.button("Autorizar", key=f"mc_apr_{p['id']}"):
+                acao = (p["id"], "Em produção")
+            if st.button("Recusar", key=f"mc_rec_{p['id']}"):
+                acao = (p["id"], "Cancelado")
+        for p in d["producao"]:
+            if st.button("Enviar", key=f"mc_env_{p['id']}"):
+                acao = (p["id"], "Enviado")
+        for p in d["entregas"]:
+            if st.button("Entregue", key=f"mc_ent_{p['id']}"):
+                acao = (p["id"], "Entregue")
+        for chave, secao in NAV_CIDADE.items():
+            if st.button(secao, key=f"mc_nav_{chave}"):
+                acao = ("nav", secao)
+    if acao:
+        if acao[0] == "nav":
+            st.session_state.secao_admin = acao[1]
+        else:
+            mudar_status(*acao)
+        st.rerun(scope="app")
+
+
+def _js(v) -> str:
+    return json.dumps(v, ensure_ascii=False).replace("</", "<\\/")
+
+
+def _injetor_cidade(d) -> str:
+    """Coloca (ou esconde) a janela flutuante da fábrica na página."""
+    chamada = ("P.__mcEsconder&&P.__mcEsconder();" if d is None
+               else f"P.__mcJanela({_js(d)},{_js(MOTOR_CIDADE)},'{VERSAO_MOTOR}');")
+    return ("<script>(function(){try{var P=window.parent;"
+            f"if(!P.__mcJanela||P.__mcVersao!=='{VERSAO_MOTOR}'){{var s=P.document.createElement('script');"
+            "s.textContent=" + _js(CODIGO_JANELA) + ";P.document.head.appendChild(s);}"
+            + chamada + "}catch(e){console.log('mini fabrica',e);}})();</script>")
+
+
+@st.fragment(run_every=15)
+def mini_cidade(local: str):
+    """local: 'painel' (grande, na seção Empresa ao vivo), 'admin' (janela flutuante do painel)
+    ou 'loja' (janela flutuante para o cliente, sem dados pessoais). Atualiza sozinha a cada 15 s."""
+    d = dados_cidade(publico=(local == "loja"))
+    if local != "loja":
+        botoes_ocultos_cidade(d)
+    if local == "painel":
+        components.html(MOTOR_CIDADE.replace(
+            "<!--DADOS-->", f"<script>mcAtualizar({_js(d)});try{{window.parent.__mcEsconder&&"
+                            "window.parent.__mcEsconder()}}catch(e){{}}</script>"), height=640)
+    else:
+        with st.container(key="mc_host"):
+            components.html(_injetor_cidade(d), height=0)
+
+
+def esconder_cidade():
+    with st.container(key="mc_host"):
+        components.html(_injetor_cidade(None), height=0)
+
+
+# Janela flutuante (roda na própria página): arrastar, mudar tamanho e minimizar
+CODIGO_JANELA = r"""
+(function(){
+var W=window, D=document; W.__mcVersao='VERSAO';
+var TAM=[380,560,820], cfg={};
+try{cfg=JSON.parse(W.localStorage.getItem('mcJanela')||'{}')||{};}catch(e){cfg={};}
+function salvar(){try{W.localStorage.setItem('mcJanela',JSON.stringify(cfg));}catch(e){}}
+function el(){return D.getElementById('mc-janela');}
+function aplicar(){
+  var w=el(); if(!w) return;
+  var corpo=w.querySelector('#mc-corpo'), fr=w.querySelector('#mc-frame'), t=(cfg.t===undefined?1:cfg.t);
+  var larg=Math.max(260,Math.min(TAM[t],W.innerWidth-16));
+  w.style.width=(cfg.min?240:larg)+'px'; corpo.style.display=cfg.min?'none':'block';
+  fr.style.height=Math.round(larg*0.64)+'px';
+  var ww=w.offsetWidth, hh=w.offsetHeight;
+  var x=(typeof cfg.x==='number')?cfg.x:W.innerWidth-ww-16, y=(typeof cfg.y==='number')?cfg.y:W.innerHeight-hh-16;
+  x=Math.max(4,Math.min(x,W.innerWidth-ww-4)); y=Math.max(4,Math.min(y,W.innerHeight-36));
+  w.style.left=x+'px'; w.style.top=y+'px';
+}
+function criar(){
+  var w=D.createElement('div'); w.id='mc-janela';
+  w.style.cssText='position:fixed;z-index:1000001;background:#fff;border-radius:14px;box-shadow:0 14px 36px rgba(15,23,42,.35);overflow:hidden;border:1px solid #cbd5e1;font-family:Segoe UI,Arial,sans-serif;';
+  var bt='background:rgba(255,255,255,.22);border:0;color:#fff;border-radius:7px;cursor:pointer;font-size:13px;width:26px;height:22px;line-height:20px;padding:0;';
+  w.innerHTML='<div id="mc-cab" style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:linear-gradient(90deg,#7c3aed,#06b6d4);color:#fff;cursor:move;user-select:none;touch-action:none;">'
+   +'<span style="flex:1;font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;color:#fff;">🏭 Fábrica ao vivo <small style="opacity:.85;font-weight:400;color:#fff;">· arraste para mover</small></span>'
+   +'<button data-a="tam" title="Mudar o tamanho" style="'+bt+'">⤢</button><button data-a="min" title="Minimizar / abrir" style="'+bt+'">–</button></div>'
+   +'<div id="mc-corpo"><iframe id="mc-frame" title="Fábrica ao vivo" style="width:100%;border:0;display:block;background:#dbeafe;"></iframe></div>';
+  D.body.appendChild(w);
+  var cab=w.querySelector('#mc-cab'), fr=w.querySelector('#mc-frame'), arr=null;
+  cab.addEventListener('click',function(e){var b=e.target.closest('button'); if(!b) return; var a=b.getAttribute('data-a');
+    if(a==='tam'){cfg.t=((cfg.t===undefined?1:cfg.t)+1)%3; cfg.min=false;} if(a==='min'){cfg.min=!cfg.min;} salvar(); aplicar();});
+  cab.addEventListener('pointerdown',function(e){ if(e.target.closest('button')) return;
+    arr={dx:e.clientX-w.offsetLeft, dy:e.clientY-w.offsetTop}; try{cab.setPointerCapture(e.pointerId);}catch(_){}
+    fr.style.pointerEvents='none'; e.preventDefault();});
+  cab.addEventListener('pointermove',function(e){ if(!arr) return; cfg.x=e.clientX-arr.dx; cfg.y=e.clientY-arr.dy; aplicar();});
+  function soltar(){ if(!arr) return; arr=null; fr.style.pointerEvents=''; salvar(); }
+  cab.addEventListener('pointerup',soltar); cab.addEventListener('pointercancel',soltar);
+  return w;
+}
+W.addEventListener('resize',aplicar);
+W.__mcJanela=function(dados,motor,versao){
+  var w=el()||criar(); w.style.display=''; var fr=w.querySelector('#mc-frame'); W.__mcDados=dados;
+  if(fr.getAttribute('data-v')!==versao){
+    fr.setAttribute('data-v',versao);
+    fr.onload=function(){try{fr.contentWindow.mcAtualizar(W.__mcDados);}catch(e){}};
+    fr.srcdoc=motor;
+  } else { try{fr.contentWindow.mcAtualizar(dados);}catch(e){} }
+  aplicar();
+};
+W.__mcEsconder=function(){var w=el(); if(w) w.style.display='none';};
+})();
+""".replace("VERSAO", VERSAO_MOTOR)
+
+# Desenho animado da fábrica (prédio, salas, bonequinhos, esteira, van e casas dos clientes)
+MOTOR_CIDADE = r"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+html,body{margin:0;padding:0;background:#dbeafe;font-family:'Segoe UI',Arial,sans-serif;overflow:hidden}
+#mc{position:relative;width:100vw;height:100vh}
+#cena{display:block;width:100vw;height:100vh;user-select:none}
+.clic{cursor:pointer}
+.clic:hover{filter:brightness(1.06) drop-shadow(0 0 3px rgba(124,58,237,.75))}
+@keyframes mc-esteira{from{transform:translateX(0)}to{transform:translateX(450px)}}
+.mc-item{animation:mc-esteira 10s linear infinite}
+@keyframes mc-rolo{to{stroke-dashoffset:-16}}
+.mc-rolo{stroke-dasharray:4 4;animation:mc-rolo .5s linear infinite}
+.mc-parado .mc-rolo{animation:none}
+@keyframes mc-prensa{0%,100%{transform:translateY(0)}50%{transform:translateY(12px)}}
+.mc-prensa{animation:mc-prensa 1.8s ease-in-out infinite}
+@keyframes mc-papel{0%{transform:translateY(-10px);opacity:0}25%{opacity:1}100%{transform:translateY(6px);opacity:0}}
+.mc-papel{animation:mc-papel 2.2s linear infinite}
+@keyframes mc-vapor{0%{transform:translateY(0);opacity:.8}100%{transform:translateY(-14px);opacity:0}}
+.mc-vapor{animation:mc-vapor 2.2s ease-out infinite}
+@keyframes mc-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-1.2px)}}
+.mc-respira{animation:mc-bob 2.8s ease-in-out infinite}
+@keyframes mc-braco{0%,100%{transform:rotate(0)}50%{transform:rotate(-32deg)}}
+.mc-trab .mc-bd{transform-box:fill-box;transform-origin:50% 8%;animation:mc-braco 1s ease-in-out infinite}
+.mc-trab .mc-be{transform-box:fill-box;transform-origin:50% 8%;animation:mc-braco 1s ease-in-out infinite .5s}
+@keyframes mc-digita{0%,100%{transform:rotate(0)}50%{transform:rotate(-14deg)}}
+.mc-digitando .mc-bd,.mc-digitando .mc-be{transform-box:fill-box;transform-origin:50% 8%;animation:mc-digita .32s ease-in-out infinite}
+.mc-digitando .mc-be{animation-delay:.16s}
+@keyframes mc-gole{0%,70%,100%{transform:rotate(0)}80%,90%{transform:rotate(-70deg)}}
+.mc-cafe .mc-bd{transform-box:fill-box;transform-origin:50% 8%;animation:mc-gole 5s ease-in-out infinite}
+@keyframes mc-pisca{0%,100%{opacity:1}50%{opacity:.2}}
+.mc-alerta{animation:mc-pisca 1s ease-in-out infinite}
+@keyframes mc-pula{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+.mc-pino{animation:mc-pula 1s ease-in-out infinite}
+@keyframes mc-nuvem{from{transform:translateX(-160px)}to{transform:translateX(1160px)}}
+.mc-nuvem{animation:mc-nuvem 70s linear infinite}
+.pessoa{transition:transform 2.6s ease-in-out, opacity .8s}
+#pop{position:absolute;display:none;left:50%;top:50%;transform:translate(-50%,-50%);width:min(94%,400px);max-height:90%;overflow:auto;background:#fff;border-radius:14px;box-shadow:0 14px 36px rgba(0,0,0,.35);border:1px solid #e5e7eb;font-size:13px;color:#1f2937;z-index:5}
+#pop .cab{display:flex;align-items:center;gap:8px;padding:9px 12px;background:linear-gradient(90deg,#7c3aed,#06b6d4);color:#fff;position:sticky;top:0}
+#pop .cab b{flex:1;font-size:14px}
+#pop .x{background:rgba(255,255,255,.25);border:0;color:#fff;border-radius:8px;cursor:pointer;padding:2px 9px;font-size:14px}
+#pop .corpo{padding:8px 12px 12px}
+#pop .lin{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px dashed #e5e7eb}
+#pop .lin b{text-align:right}
+#pop h4{margin:10px 0 2px;font-size:13px;color:#5b21b6}
+#pop .ped{background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:7px 9px;margin:6px 0;line-height:1.35}
+#pop .acoes{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
+#pop button.ac{border:1.5px solid #8b5cf6;background:#fff;color:#5b21b6;border-radius:8px;padding:4px 10px;font-weight:700;cursor:pointer;font-size:12px}
+#pop button.ac.pri{background:linear-gradient(90deg,#7c3aed,#06b6d4);color:#fff;border:0}
+#pop .humor{display:inline-block;padding:1px 8px;border-radius:999px;font-weight:700;font-size:12px}
+#pop .motivo{font-size:12px;color:#6b7280;margin:5px 0}
+#pop .vazio{color:#6b7280;font-size:12px}
+#pop .ev{font-size:12px;padding:4px 6px;border-radius:8px;margin:3px 0;background:#f8fafc}
+#pop .ev.clicavel{cursor:pointer}
+#pop .ev.clicavel:hover{background:#ede9fe}
+#aviso{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);background:#111827;color:#fff;padding:6px 14px;border-radius:999px;font-size:12px;display:none;z-index:6;white-space:nowrap}
+</style></head><body>
+<div id="mc"><svg id="cena" viewBox="0 0 1000 640" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg"></svg>
+<div id="pop"></div><div id="aviso"></div></div>
+<script>
+var D=null, posAnt={}, popAberto=null;
+var vanRota=null, vanAssin='', vanPos={x:622,y:527}, vanSeg=0, vanEspera=0, vanUlt=0, vanCiclo=false, vanEsq=false;
+var svg=document.getElementById('cena'), pop=document.getElementById('pop'), avisoEl=document.getElementById('aviso');
+var GARAGEM={x:622,y:527};
+var HUMOR={feliz:['😊','Feliz','#dcfce7','#166534'],tranquilo:['😌','Tranquilo','#e0f2fe','#075985'],
+  estressado:['😰','Estressado','#fef3c7','#92400e'],bravo:['😠','Bravo','#fee2e2','#991b1b']};
+var POSTOS={'Diretoria':[[232,206],[112,206]],'Atendimento':[[425,206],[585,206],[505,206]],
+  'Produção':[[128,342],[256,342],[370,342],[440,342]],'Estoque':[[178,530],[160,530]],
+  'Expedição':[[440,508],[395,508]],'Entrega':[[640,530]]};
+var CAFE=[[594,372],[634,372],[674,372],[540,368],[560,368]];
+var SALAS={
+ 'Diretoria':['🏢 Diretoria','Todo pedido novo passa por aqui. O diretor autoriza e o pedido vai para a produção.','pedidos','Diretoria'],
+ 'Atendimento':['💬 Atendimento','A equipe conversa com os clientes pelo WhatsApp, cobra pagamentos e faz os retornos.','clientes','Atendimento'],
+ 'Produção':['🔥 Produção','Impressora de sublimação, prensa térmica e prensa de canecas. A esteira leva os pedidos autorizados.','artes','Produção'],
+ 'Cafeteria':['☕ Cafeteria','Quem está sem serviço vem tomar um café. Quando chega pedido, volta para o posto.','',''],
+ 'Estoque':['📦 Estoque','Cada pedido autorizado tira o material das prateleiras.','estoque','Estoque'],
+ 'Expedição':['🏷️ Expedição','Embalagem e etiquetas dos pedidos prontos para sair.','etiquetas','Expedição'],
+ 'Garagem':['🚚 Garagem','A van sai daqui com os pedidos enviados e vai até a casa do cliente.','rastreio','Entrega']};
+
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function cor(c,p){return /^#[0-9a-fA-F]{3,8}$/.test(c||'')?c:p;}
+function corta(s,n){s=String(s||'');return s.length>n?s.slice(0,n-1)+'…':s;}
+function tipo(t){t=String(t||'').toLowerCase();
+  var r=[['canec','caneca'],['copo','copo'],['térm','copo'],['termic','copo'],['garraf','copo'],['camis','camiseta'],
+         ['bon','bone'],['chav','chaveiro'],['almof','almofada'],['mate','mateira']];
+  for(var i=0;i<r.length;i++){if(t.indexOf(r[i][0])>=0)return r[i][1];} return 'caixa';}
+function produto(tp,c){
+  switch(tp){
+  case 'caneca':return '<rect x="-5" y="-12" width="10" height="12" rx="1.6" fill="#fff" stroke="#0f766e" stroke-width=".8"/><path d="M5 -9 q4.5 0 4.5 3.5 q0 3.5 -4.5 3.5" fill="none" stroke="#0f766e" stroke-width="1.3"/><rect x="-3.6" y="-9" width="7.2" height="4.6" fill="'+c+'"/>';
+  case 'camiseta':return '<path d="M-7 -11 l4 -2 q3 2 6 0 l4 2 l-2 4.5 l-2 -1 v7.5 h-6 v-7.5 l-2 1z" fill="'+c+'" stroke="#334155" stroke-width=".6"/>';
+  case 'copo':return '<path d="M-4.2 -12 h8.4 l-1.2 12 h-6z" fill="#cbd5e1" stroke="#475569" stroke-width=".7"/><rect x="-4.8" y="-14.4" width="9.6" height="2.6" rx="1" fill="#334155"/><rect x="-3" y="-8" width="6" height="4" fill="'+c+'"/>';
+  case 'bone':return '<path d="M-6 -2 a6 6.5 0 0 1 12 0z" fill="'+c+'"/><path d="M4 -2.4 h7 q0 2.4 -7 2.4z" fill="'+c+'" stroke="#334155" stroke-width=".4"/>';
+  case 'chaveiro':return '<circle cx="0" cy="-10.5" r="2.6" fill="none" stroke="#9ca3af" stroke-width="1.1"/><rect x="-4.5" y="-8" width="9" height="8" rx="2.4" fill="'+c+'"/>';
+  case 'almofada':return '<rect x="-7.5" y="-10" width="15" height="10" rx="3.4" fill="'+c+'" stroke="#6d28d9" stroke-width=".5"/>';
+  case 'mateira':return '<rect x="-4.4" y="-13" width="8.8" height="13" rx="2" fill="#92400e"/><path d="M-3 -13 q3 -5 6 0" stroke="#78350f" fill="none"/>';
+  default:return '<rect x="-6" y="-10" width="12" height="10" fill="#d6a15c" stroke="#8a5a24" stroke-width=".7"/><path d="M-6 -6 h12" stroke="#8a5a24" stroke-width=".5"/>';}
+}
+function cabeloSVG(e,c,cam){
+  switch(e){
+  case 'Coque':return '<path d="M-7.9 -41 a7.9 7.9 0 0 1 15.8 0 q-7.9 -4.4 -15.8 0z" fill="'+c+'"/><circle cx="0" cy="-49.4" r="3.8" fill="'+c+'"/>';
+  case 'Rabo de cavalo':return '<path d="M6.4 -44 q6.5 2 4.2 12.5 q-3 -4 -5.8 -9.4z" fill="'+c+'"/><path d="M-7.9 -41 a7.9 7.9 0 0 1 15.8 0 q-7.9 -4.4 -15.8 0z" fill="'+c+'"/>';
+  case 'Careca':return '<path d="M-7.5 -38.5 q-.6 -3.4 1 -4.6" stroke="'+c+'" stroke-width="1.7" fill="none"/><path d="M7.5 -38.5 q.6 -3.4 -1 -4.6" stroke="'+c+'" stroke-width="1.7" fill="none"/>';
+  case 'Boné':return '<path d="M-8.1 -41.2 a8.1 8.3 0 0 1 16.2 0z" fill="'+cam+'"/><path d="M-1 -41.6 h12.6 q1 1.6 -1 2.2 h-11.6z" fill="'+cam+'"/><path d="M-8.1 -41.2 h16.2" stroke="rgba(0,0,0,.25)" stroke-width=".7"/>';
+  default:return '<path d="M-7.9 -40.4 a7.9 8.2 0 0 1 15.8 0 q-3 -3.6 -7.9 -3.1 q-4.9 -.5 -7.9 3.1z" fill="'+c+'"/>';}
+}
+function rosto(h){
+  var s='stroke="#2b1b0e" fill="none" stroke-linecap="round"';
+  if(h==='feliz')return '<path d="M-4.3 -43.4 l2.7 -.6 M1.6 -44 l2.7 .6" '+s+' stroke-width=".9"/><path d="M-3.1 -37.2 Q0 -34.2 3.1 -37.2z" fill="#fff" stroke="#7a2e1d" stroke-width="1"/>';
+  if(h==='tranquilo')return '<path d="M-4.3 -43.5 h2.8 M1.5 -43.5 h2.8" '+s+' stroke-width=".9"/><path d="M-2.3 -36.7 Q0 -35.3 2.3 -36.7" stroke="#7a2e1d" stroke-width="1" fill="none" stroke-linecap="round"/>';
+  if(h==='estressado')return '<path d="M-4.5 -42.6 l2.8 -1.3 M1.7 -43.9 l2.8 1.3" '+s+' stroke-width="1"/><path d="M-3.2 -36.3 q.8 -1 1.6 0 q.8 1 1.6 0 q.8 -1 1.6 0 q.8 1 1.6 0" stroke="#7a2e1d" stroke-width=".9" fill="none"/><path d="M7.6 -46 q1.8 2.8 0 3.9 q-1.8 -1.1 0 -3.9z" fill="#60a5fa"/>';
+  return '<path d="M-4.6 -44.4 l2.9 1.5 M1.7 -42.9 l2.9 -1.5" '+s+' stroke-width="1.3"/><path d="M-3.1 -35.3 Q0 -38.2 3.1 -35.3" stroke="#7a2e1d" stroke-width="1.1" fill="none" stroke-linecap="round"/><circle cx="-4.7" cy="-38.2" r="1.6" fill="#f87171" opacity=".55"/><circle cx="4.7" cy="-38.2" r="1.6" fill="#f87171" opacity=".55"/>';
+}
+function pessoaSVG(p){
+  var pele=cor(p.pele,'#E0AC88'), cam=cor(p.camisa,'#2563eb'), cab=cor(p.cabelo,'#1a1a1a'), cal='#1f2937';
+  if(p.setor==='Diretoria') cal='#111827';
+  if(p.setor==='Produção'||p.setor==='Estoque') cal='#1e3a8a';
+  var tras=p.estilo==='Longo'?'<path d="M-8.7 -41 q0 -9.6 8.7 -9.6 q8.7 0 8.7 9.6 v12.5 q-3 1.6 -5 0 v-6.4 h-7.4 v6.4 q-2 1.6 -5 0z" fill="'+cab+'"/>':'';
+  var frente=cabeloSVG(p.estilo==='Longo'?'Curto':p.estilo,cab,cam);
+  var mao='';
+  if(p.estado==='pausa') mao='<g><rect x="7.4" y="-21.4" width="4.4" height="5" rx=".9" fill="#fff" stroke="#92400e" stroke-width=".6"/><path class="mc-vapor" d="M9.4 -23.4 q1.2 -2 0 -4" stroke="#cbd5e1" stroke-width=".8" fill="none"/></g>';
+  else if(p.acao==='carregando') mao='<rect x="-7.5" y="-27.5" width="15" height="10.5" fill="#d6a15c" stroke="#8a5a24" stroke-width=".7"/><path d="M-7.5 -23 h15" stroke="#8a5a24" stroke-width=".5"/>';
+  else if(p.acao==='lendo') mao='<rect x="-6.4" y="-26" width="12.8" height="8.6" fill="#fff" stroke="#94a3b8" stroke-width=".6" transform="rotate(-6)"/><path d="M-4.6 -23.5 h8 M-4.6 -21.5 h6" stroke="#94a3b8" stroke-width=".5" transform="rotate(-6)"/>';
+  var fone=p.setor==='Atendimento'&&p.estado!=='pausa'?'<path d="M-8.2 -41 a8.2 8.2 0 0 1 16.4 0" stroke="#111" stroke-width="1.2" fill="none"/><rect x="-9.6" y="-42.2" width="2.8" height="4.6" rx="1" fill="#111"/><path d="M-8.2 -38 q1 4.2 5.2 4.6" stroke="#111" stroke-width=".7" fill="none"/>':'';
+  var gravata=p.setor==='Diretoria'?'<path d="M0 -31 l1.6 2 l-1 8 l-.6 1 l-.6 -1 l-1 -8z" fill="#b91c1c"/>':'';
+  var cls='mc-respira'+(p.acao==='trabalho'||p.acao==='carregando'?' mc-trab':'')+(p.acao==='digitando'?' mc-digitando':'')+(p.estado==='pausa'?' mc-cafe':'');
+  return '<ellipse cx="0" cy="0" rx="10" ry="2.4" fill="rgba(0,0,0,.18)"/><g class="'+cls+'">'
+   +'<rect x="-6" y="-17" width="5.2" height="16" rx="1.5" fill="'+cal+'"/><rect x=".8" y="-17" width="5.2" height="16" rx="1.5" fill="'+cal+'"/>'
+   +'<rect x="-7.3" y="-2.4" width="7" height="3" rx="1.4" fill="#222"/><rect x=".3" y="-2.4" width="7" height="3" rx="1.4" fill="#222"/>'
+   +'<g class="mc-be"><rect x="-11.7" y="-31" width="4.5" height="14" rx="2.2" fill="'+cam+'"/><circle cx="-9.45" cy="-16.4" r="2.3" fill="'+pele+'"/></g>'
+   +'<path d="M-8.6 -26 q0 -6 5 -6 h7.2 q5 0 5 6 v10 h-17.2z" fill="'+cam+'"/>'
+   +'<path d="M-2.4 -32 l2.4 3 l2.4 -3" fill="none" stroke="rgba(0,0,0,.28)" stroke-width=".8"/>'+gravata
+   +'<rect x="-2" y="-34.6" width="4" height="3.6" fill="'+pele+'"/>'+tras
+   +'<circle cx="0" cy="-40" r="7.6" fill="'+pele+'"/>'
+   +'<circle cx="-7.4" cy="-39.6" r="1.6" fill="'+pele+'"/><circle cx="7.4" cy="-39.6" r="1.6" fill="'+pele+'"/>'
+   +'<circle cx="-2.7" cy="-40.4" r="1.05" fill="#1f2937"/><circle cx="2.7" cy="-40.4" r="1.05" fill="#1f2937"/>'
+   +'<circle cx="-2.4" cy="-40.8" r=".32" fill="#fff"/><circle cx="3" cy="-40.8" r=".32" fill="#fff"/>'
+   +'<path d="M0 -39.6 q.9 1.7 -.4 2.1" stroke="rgba(0,0,0,.28)" stroke-width=".6" fill="none"/>'
+   +rosto(p.humor)+frente+fone
+   +'<g class="mc-bd"><rect x="7.2" y="-31" width="4.5" height="14" rx="2.2" fill="'+cam+'"/><circle cx="9.45" cy="-16.4" r="2.3" fill="'+pele+'"/>'+mao+'</g>'
+   +'</g>';
+}
+function sala(x,y,w,h,fundo,piso,nome,rotulo){
+  return '<g class="clic" data-k="sala" data-v="'+nome+'"><rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" fill="'+fundo+'"/>'
+   +'<rect x="'+x+'" y="'+(y+h-12)+'" width="'+w+'" height="12" fill="url(#'+piso+')"/>'
+   +'<rect x="'+(x+6)+'" y="'+(y+6)+'" width="'+(rotulo.length*6.3+16)+'" height="16" rx="8" fill="rgba(255,255,255,.88)" stroke="rgba(0,0,0,.08)"/>'
+   +'<text x="'+(x+14)+'" y="'+(y+18)+'" font-size="10" font-weight="700" fill="#1f2937">'+rotulo+'</text>'
+   +'<path d="M'+(x+w/2)+' '+y+' v6" stroke="#475569"/><path d="M'+(x+w/2-7)+' '+(y+10)+' q7 -6 14 0z" fill="#475569"/>'
+   +'</g>';
+}
+function janela(x,y,w,h,noite){
+  return '<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" fill="'+(noite?'#1e3a8a':'#bae6fd')+'" stroke="#94a3b8" stroke-width="3"/>'
+   +'<path d="M'+(x+w/2)+' '+y+' v'+h+' M'+x+' '+(y+h/2)+' h'+w+'" stroke="#94a3b8" stroke-width="2"/>'
+   +(noite?'<circle cx="'+(x+w*0.7)+'" cy="'+(y+h*0.3)+'" r="3" fill="#fef9c3"/>':'<path d="M'+(x+5)+' '+(y+h-6)+' l10 -10" stroke="#fff" stroke-width="2" opacity=".7"/>');
+}
+function planta(x,y){return '<rect x="'+(x-7)+'" y="'+(y-14)+'" width="14" height="14" rx="2" fill="#b45309"/><path d="M'+x+' '+(y-14)+' q-10 -10 -4 -24 M'+x+' '+(y-14)+' q2 -14 10 -20 M'+x+' '+(y-14)+' q-2 -10 2 -28" stroke="#15803d" stroke-width="4" fill="none" stroke-linecap="round"/>';}
+function num(x,y,rot,val,c){return '<text x="'+x+'" y="'+y+'" font-size="5.6" fill="#94a3b8">'+rot+'</text><text x="'+x+'" y="'+(y+11)+'" font-size="11" font-weight="800" fill="'+c+'">'+esc(val)+'</text>';}
+
+function cenario(noite){
+  var n=D.numeros, s=[], c=cor(D.cor,'#1d4ed8');
+  s.push('<defs><linearGradient id="ceuD" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7dd3fc"/><stop offset="1" stop-color="#e0f2fe"/></linearGradient>'
+   +'<linearGradient id="ceuN" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0b1d3a"/><stop offset="1" stop-color="#1e3a8a"/></linearGradient>'
+   +'<pattern id="tijolo" width="24" height="12" patternUnits="userSpaceOnUse"><rect width="24" height="12" fill="#b9c3d3"/><path d="M0 12h24M12 0v6M0 6h24M6 6v6M18 6v6" stroke="#a7b2c4" stroke-width="1"/></pattern>'
+   +'<pattern id="madeira" width="18" height="12" patternUnits="userSpaceOnUse"><rect width="18" height="12" fill="#c9a77c"/><path d="M0 12h18M9 0v12" stroke="#b08d61" stroke-width=".8"/></pattern>'
+   +'<pattern id="ladrilho" width="12" height="12" patternUnits="userSpaceOnUse"><rect width="12" height="12" fill="#d6d3cd"/><path d="M0 12h12M12 0v12" stroke="#bdb8ae" stroke-width=".8"/></pattern>'
+   +'<pattern id="concreto" width="20" height="12" patternUnits="userSpaceOnUse"><rect width="20" height="12" fill="#a8a29e"/><circle cx="5" cy="4" r=".8" fill="#78716c"/><circle cx="15" cy="9" r=".8" fill="#78716c"/></pattern>'
+   +'<clipPath id="tvclip"><rect x="120" y="72" width="198" height="70"/></clipPath></defs>');
+  s.push('<rect width="1000" height="640" fill="url(#'+(noite?'ceuN':'ceuD')+')" data-k="fundo"/>');
+  if(noite){ for(var i=0;i<26;i++){ s.push('<circle cx="'+((i*137)%1000)+'" cy="'+(8+(i*53)%90)+'" r="'+(i%3?0.9:1.4)+'" fill="#fff" opacity=".8"/>'); }
+    s.push('<circle cx="930" cy="60" r="20" fill="#fef9c3"/><circle cx="938" cy="54" r="18" fill="#1e3a8a" opacity=".55"/>');
+  } else {
+    s.push('<circle cx="930" cy="62" r="24" fill="#fde047"/><circle cx="930" cy="62" r="34" fill="#fde047" opacity=".25"/>');
+    [[60,0],[120,-30],[30,-55]].forEach(function(nv){ s.push('<g class="mc-nuvem" style="animation-delay:'+nv[1]+'s"><g transform="translate(0,'+nv[0]+')" fill="#fff" opacity=".9"><ellipse cx="0" cy="0" rx="34" ry="11"/><ellipse cx="18" cy="-8" rx="20" ry="12"/><ellipse cx="-16" cy="-5" rx="16" ry="9"/></g></g>'); });
+  }
+  s.push('<text x="990" y="18" text-anchor="end" font-size="11" font-weight="800" fill="'+(noite?'#fca5a5':'#dc2626')+'"><tspan class="mc-alerta">●</tspan> AO VIVO</text>');
+  // cidade ao fundo
+  [[716,430,40],[760,400,34],[798,445,46],[848,410,30],[882,436,44],[930,395,36],[970,428,30]].forEach(function(b){
+    s.push('<rect x="'+b[0]+'" y="'+b[1]+'" width="'+b[2]+'" height="'+(545-b[1])+'" fill="'+(noite?'#1e293b':'#94a3b8')+'" opacity=".55"/>');
+    for(var yy=b[1]+8;yy<480;yy+=14){ for(var xx=b[0]+5;xx<b[0]+b[2]-6;xx+=10){ s.push('<rect x="'+xx+'" y="'+yy+'" width="5" height="6" fill="'+(noite?((xx+yy)%3?'#fde68a':'#334155'):'#cbd5e1')+'" opacity=".8"/>'); } }
+  });
+  // chão e rua
+  s.push('<rect x="0" y="536" width="1000" height="10" fill="#86c56b"/><rect x="0" y="543" width="1000" height="13" fill="#d1d5db"/>'
+   +'<path d="M0 556 h1000" stroke="#9ca3af" stroke-width="2"/><rect x="0" y="557" width="1000" height="83" fill="#374151"/>'
+   +'<path d="M0 599 h1000" stroke="#facc15" stroke-width="3" stroke-dasharray="22 16"/>'
+   +'<g><rect x="706" y="508" width="3" height="36" fill="#475569"/><rect x="684" y="500" width="48" height="12" rx="2" fill="#15803d"/><text x="708" y="509" font-size="6.5" fill="#fff" text-anchor="middle" font-weight="700">Rua dos Clientes</text></g>');
+  // prédio
+  s.push('<rect x="14" y="54" width="694" height="490" fill="url(#tijolo)" stroke="#64748b" stroke-width="2"/>'
+   +'<rect x="8" y="10" width="706" height="46" rx="7" fill="'+c+'"/><rect x="8" y="46" width="706" height="10" fill="rgba(0,0,0,.15)"/>'
+   +'<text x="361" y="40" text-anchor="middle" font-size="21" font-weight="800" fill="#fff" letter-spacing="1">🏷️ '+esc(corta(D.empresa,34))+'</text>'
+   +'<rect x="14" y="214" width="694" height="9" fill="#64748b"/><rect x="14" y="374" width="694" height="9" fill="#64748b"/><rect x="14" y="534" width="694" height="9" fill="#64748b"/>');
+  s.push(sala(22,62,306,152,'#e8eef7','madeira','Diretoria','🏢 Diretoria'));
+  s.push(sala(334,62,366,152,'#fdf2f8','madeira','Atendimento','💬 Atendimento'));
+  s.push(sala(22,223,478,151,'#ecfdf5','ladrilho','Produção','🔥 Produção'));
+  s.push(sala(506,223,194,151,'#fef3c7','madeira','Cafeteria','☕ Cafeteria'));
+  s.push(sala(22,383,308,151,'#fff7ed','concreto','Estoque','📦 Estoque'));
+  s.push(sala(336,383,204,151,'#eff6ff','ladrilho','Expedição','🏷️ Expedição'));
+  s.push(sala(546,383,154,151,'#e5e7eb','concreto','Garagem','🚚 Garagem'));
+  s.push('<rect x="328" y="62" width="6" height="152" fill="#64748b"/><rect x="500" y="223" width="6" height="151" fill="#64748b"/>'
+   +'<rect x="330" y="383" width="6" height="151" fill="#64748b"/><rect x="540" y="383" width="6" height="151" fill="#64748b"/>');
+  // ---------- Diretoria ----------
+  s.push(janela(36,84,62,52,noite));
+  s.push('<g><rect x="34" y="150" width="66" height="52" fill="#7c4a24"/><path d="M34 167 h66 M34 184 h66" stroke="#5b3416" stroke-width="2"/>'
+   +[0,1,2,3,4,5].map(function(i){return '<rect x="'+(38+i*10)+'" y="'+(154+(i%2)*1)+'" width="7" height="12" fill="'+['#ef4444','#3b82f6','#f59e0b','#10b981','#8b5cf6','#ec4899'][i]+'"/><rect x="'+(38+i*10)+'" y="'+(171+(i%2))+'" width="7" height="12" fill="'+['#64748b','#f97316','#0ea5e9','#84cc16','#e11d48','#a855f7'][i]+'"/>';}).join('')+'</g>');
+  s.push('<rect x="218" y="150" width="28" height="44" rx="6" fill="#111827"/>'+planta(314,206));
+  var mx=1; D.semana.forEach(function(x){mx=Math.max(mx,x.qtd);});
+  var tv='<g class="clic" data-k="tv"><rect x="116" y="68" width="206" height="78" rx="5" fill="#111827"/><rect x="120" y="72" width="198" height="70" fill="#0b1220"/><g clip-path="url(#tvclip)">'
+   +'<text x="125" y="82" font-size="7" font-weight="800" fill="#67e8f9">📊 PAINEL AO VIVO</text><text id="relogio" x="314" y="82" font-size="7" text-anchor="end" fill="#e2e8f0">--:--</text>'
+   +(n.fat?'<text x="125" y="91" font-size="6.2" fill="#86efac">Faturamento hoje: '+esc(n.fat)+'</text>':'')
+   +num(125,100,'Pedidos hoje',n.hoje,'#ffffff')+num(176,100,'Na produção',n.producao,'#fbbf24')
+   +num(125,120,'A caminho',n.caminho,'#60a5fa')+num(176,120,'Entregues 7d',n.entregues,'#4ade80')
+   +'<text x="232" y="91" font-size="5.6" fill="#94a3b8">Pedidos · 7 dias</text>';
+  D.semana.forEach(function(x,i){ var hh=Math.max(1,30*x.qtd/mx); tv+='<rect x="'+(234+i*11)+'" y="'+(127-hh)+'" width="8" height="'+hh+'" rx="1.5" fill="'+(i===6?'#22d3ee':'#0e7490')+'"/><text x="'+(238+i*11)+'" y="134" font-size="4.8" text-anchor="middle" fill="#94a3b8">'+esc(x.dia.slice(0,1))+'</text>'; });
+  tv+='<text id="evento" x="125" y="140.5" font-size="5.4" fill="#a5b4fc"></text></g></g>';
+  s.push(tv);
+  // ---------- Atendimento ----------
+  s.push(janela(350,84,48,46,noite)+janela(486,84,48,46,noite));
+  s.push('<rect x="411" y="152" width="28" height="42" rx="6" fill="#831843"/><rect x="571" y="152" width="28" height="42" rx="6" fill="#831843"/>');
+  s.push('<g class="clic" data-k="sala" data-v="Atendimento"><rect x="626" y="78" width="66" height="70" rx="6" fill="#fff" stroke="#f9a8d4" stroke-width="2"/>'
+   +'<text x="659" y="91" font-size="7.4" font-weight="800" text-anchor="middle" fill="#9d174d">💬 WhatsApp</text>'
+   +'<text x="632" y="105" font-size="6.6" fill="#1f2937">Novos: <tspan font-weight="800">'+n.novos+'</tspan></text>'
+   +(D.publico?'<text x="632" y="118" font-size="6.6" fill="#1f2937">Sempre online 😊</text>':
+     '<text x="632" y="118" font-size="6.6" fill="'+(n.pendentes?'#b91c1c':'#1f2937')+'">Sem resposta: <tspan font-weight="800">'+n.pendentes+'</tspan></text>'
+     +'<text x="632" y="131" font-size="6.6" fill="#1f2937">Retornos hoje: <tspan font-weight="800">'+n.retornos+'</tspan></text>')
+   +(n.novos?'<text x="682" y="144" font-size="9" class="mc-alerta">🔔</text>':'')+'</g>');
+  // ---------- Produção ----------
+  var ativo=D.producao.length>0;
+  s.push('<g class="clic" data-k="sala" data-v="Produção">'
+   +'<rect x="40" y="282" width="70" height="48" rx="6" fill="#e5e7eb" stroke="#9ca3af"/><rect x="47" y="275" width="56" height="9" rx="3" fill="#374151"/>'
+   +'<rect x="88" y="291" width="15" height="9" rx="1" fill="'+(ativo?'#22d3ee':'#64748b')+'"/><circle cx="50" cy="296" r="3" fill="'+(ativo?'#22c55e':'#9ca3af')+'"/>'
+   +(ativo?'<g class="mc-papel"><rect x="55" y="304" width="40" height="18" fill="#fff" stroke="#cbd5e1"/><rect x="62" y="308" width="26" height="9" fill="'+c+'" opacity=".7"/></g>':'')
+   +'<text x="75" y="327" font-size="6" text-anchor="middle" fill="#334155">Impressora</text>'
+   +'<rect x="158" y="316" width="78" height="14" rx="2" fill="#475569"/><rect x="222" y="262" width="10" height="56" fill="#64748b"/><rect x="162" y="256" width="72" height="9" rx="2" fill="#475569"/>'
+   +'<path d="M162 260 l-14 -8" stroke="#1f2937" stroke-width="3" stroke-linecap="round"/>'
+   +'<g class="'+(ativo?'mc-prensa':'')+'"><rect x="166" y="282" width="58" height="11" rx="2" fill="#334155"/><rect x="168" y="293" width="54" height="2.4" fill="'+(ativo?'#f97316':'#94a3b8')+'"/></g>'
+   +'<rect x="166" y="306" width="58" height="9" rx="1" fill="#94a3b8"/><path d="M182 306 l4 -3 q9 3 18 0 l4 3z" fill="#fff"/>'
+   +'<text x="197" y="340" font-size="6" text-anchor="middle" fill="#334155">Prensa térmica</text>'
+   +'<rect x="284" y="286" width="62" height="44" rx="5" fill="#1f2937"/><rect x="296" y="270" width="38" height="24" rx="8" fill="'+(ativo?'#ef4444':'#64748b')+'" opacity=".9"/>'
+   +'<g transform="translate(315,292)">'+produto('caneca',c)+'</g><text x="315" y="312" font-size="7" text-anchor="middle" fill="'+(ativo?'#fca5a5':'#9ca3af')+'">'+(ativo?'180°C':'desligada')+'</text>'
+   +'<text x="315" y="327" font-size="6" text-anchor="middle" fill="#e5e7eb">Canecas</text></g>');
+  var feitos=n.entregues+n.caminho, fila=n.producao, tot=Math.max(1,feitos+fila);
+  s.push('<g class="clic" data-k="prod"><rect x="398" y="232" width="96" height="40" rx="4" fill="#111827"/>'
+   +'<text x="404" y="243" font-size="6.4" font-weight="800" fill="#6ee7b7">⚙️ PRODUÇÃO</text>'
+   +'<text x="404" y="254" font-size="6" fill="#e5e7eb">Na fila: '+fila+' · Prontos: '+feitos+'</text>'
+   +'<rect x="404" y="259" width="84" height="6" rx="3" fill="#374151"/><rect x="404" y="259" width="'+(84*feitos/tot).toFixed(1)+'" height="6" rx="3" fill="#10b981"/></g>');
+  s.push('<g><rect x="398" y="284" width="96" height="4" fill="#94a3b8"/>'+[0,1,2,3,4].map(function(i){return '<g transform="translate('+(408+i*19)+',284)">'+produto(['caneca','camiseta','copo','bone','almofada'][i],['#7c3aed','#ec4899','#0ea5e9','#f59e0b','#10b981'][i])+'</g>';}).join('')+'</g>');
+  // ---------- Cafeteria ----------
+  s.push('<g class="clic" data-k="sala" data-v="Cafeteria"><rect x="512" y="300" width="56" height="62" rx="3" fill="#92400e"/><rect x="510" y="296" width="60" height="6" rx="2" fill="#b45309"/>'
+   +'<rect x="520" y="270" width="30" height="27" rx="3" fill="#374151"/><rect x="524" y="275" width="12" height="7" fill="#22d3ee"/><rect x="531" y="288" width="8" height="8" rx="1" fill="#fff"/>'
+   +'<path class="mc-vapor" d="M535 286 q2 -4 0 -8" stroke="#e5e7eb" stroke-width="1.4" fill="none"/>'
+   +'<rect x="596" y="236" width="94" height="40" rx="4" fill="#1f2937" stroke="#92400e" stroke-width="3"/>'
+   +'<text x="643" y="250" font-size="8" font-weight="800" fill="#fef3c7" text-anchor="middle">CAFÉ ☕</text>'
+   +'<text x="643" y="261" font-size="6" fill="#fde68a" text-anchor="middle">pão de queijo · bolo</text>'
+   +'<text x="643" y="271" font-size="6" fill="#fde68a" text-anchor="middle">chimarrão 🧉</text>'
+   +'<path d="M620 223 v18 M668 223 v18" stroke="#78350f"/><circle cx="620" cy="243" r="4" fill="'+(noite?'#fde047':'#fef3c7')+'"/><circle cx="668" cy="243" r="4" fill="'+(noite?'#fde047':'#fef3c7')+'"/></g>');
+  // ---------- Estoque ----------
+  s.push('<g>');
+  [36,210].forEach(function(rx){ s.push('<rect x="'+rx+'" y="392" width="4" height="130" fill="#475569"/><rect x="'+(rx+108)+'" y="392" width="4" height="130" fill="#475569"/>'); });
+  for(var k2=0;k2<8;k2++){
+    var rx2=k2<4?36:210, py=416+(k2%4)*31, m=D.estoque[k2], cheio=D.estoque.length?(m?m.nivel:0):0.5;
+    var caixas=Math.round(cheio*6), alerta=m&&m.repor&&!D.publico, g='<g class="clic" data-k="prat" data-v="'+k2+'">';
+    g+='<rect x="'+(rx2+4)+'" y="'+(py-22)+'" width="104" height="22" fill="transparent"/>';
+    for(var b=0;b<caixas;b++){ g+='<rect x="'+(rx2+7+b*16.5)+'" y="'+(py-16)+'" width="15" height="16" fill="'+(alerta?'#fca5a5':'#d6a15c')+'" stroke="'+(alerta?'#b91c1c':'#8a5a24')+'" stroke-width=".8"/><path d="M'+(rx2+7+b*16.5)+' '+(py-11)+' h15" stroke="#8a5a24" stroke-width=".5"/>'; }
+    g+='<rect x="'+(rx2+2)+'" y="'+py+'" width="108" height="7" fill="#64748b"/>';
+    var rot=m?corta(m.material,20)+' · '+m.qtd:(D.estoque.length?'':'cadastre materiais');
+    if(rot) g+='<text x="'+(rx2+6)+'" y="'+(py+5.6)+'" font-size="5" fill="#fff">'+esc(rot)+'</text>';
+    if(alerta) g+='<g class="mc-alerta"><circle cx="'+(rx2+100)+'" cy="'+(py-20)+'" r="5.5" fill="#ef4444"/><text x="'+(rx2+100)+'" y="'+(py-17.6)+'" font-size="8" font-weight="800" fill="#fff" text-anchor="middle">!</text></g>';
+    s.push(g+'</g>');
+  }
+  s.push('</g>');
+  // ---------- Expedição ----------
+  var pilha=Math.min(6,n.caminho+n.producao);
+  s.push('<g class="clic" data-k="sala" data-v="Expedição">');
+  for(var p2=0;p2<pilha;p2++){ var px=344+(p2%2)*18, pyy=508-Math.floor(p2/2)*14; s.push('<rect x="'+px+'" y="'+pyy+'" width="17" height="14" fill="#d6a15c" stroke="#8a5a24" stroke-width=".8"/><rect x="'+(px+3)+'" y="'+(pyy+4)+'" width="9" height="5" fill="#fff"/>'); }
+  if(!D.publico&&n.sem_codigo) s.push('<g><rect x="470" y="402" width="62" height="30" fill="#fef9c3" stroke="#eab308" transform="rotate(3 500 417)"/><text x="501" y="414" font-size="6" text-anchor="middle" fill="#854d0e" transform="rotate(3 500 417)">Sem rastreio:</text><text x="501" y="426" font-size="9" font-weight="800" text-anchor="middle" fill="#b91c1c" transform="rotate(3 500 417)">'+n.sem_codigo+'</text></g>');
+  s.push('</g>');
+  // ---------- Garagem ----------
+  s.push('<g class="clic" data-k="sala" data-v="Garagem"><rect x="552" y="389" width="142" height="12" fill="#94a3b8"/><path d="M552 393 h142 M552 397 h142" stroke="#64748b"/>'
+   +'<rect x="560" y="408" width="44" height="28" fill="#cbd5e1" stroke="#64748b"/><path d="M566 414 l8 14 M580 412 v18 M592 414 l-6 14" stroke="#475569" stroke-width="2"/>'
+   +'<ellipse cx="640" cy="528" rx="26" ry="4" fill="#57534e" opacity=".5"/></g>');
+  return s.join('');
+}
+function posicoes(){
+  var ocup={}, cafe=0, res=[];
+  D.equipe.forEach(function(p,idx){
+    var x=0,y=0,vis=true;
+    if(p.estado==='dirigindo'){vis=false;}
+    else if(p.estado==='pausa'){var cc=CAFE[cafe%CAFE.length]; x=cc[0]+(cafe>=CAFE.length?10:0); y=cc[1]; cafe++;}
+    else {var l=POSTOS[p.setor]||[[360,530]], k=ocup[p.setor]||0; ocup[p.setor]=k+1; var b=l[Math.min(k,l.length-1)]; x=b[0]+(k>=l.length?(k-l.length+1)*26:0); y=b[1];}
+    res.push({p:p,idx:idx,x:x,y:y,vis:vis});
+  });
+  return res;
+}
+function pessoas(lista){
+  return '<g id="pessoas">'+lista.filter(function(o){return o.vis;}).map(function(o){
+    var p=o.p, H=HUMOR[p.humor]||HUMOR.feliz, ch=esc(p.nome+'|'+p.setor);
+    return '<g class="pessoa clic" data-k="p" data-v="'+o.idx+'" data-id="'+ch+'" data-x="'+o.x+'" data-y="'+o.y+'" style="transform:translate('+o.x+'px,'+o.y+'px)">'
+     +'<g transform="scale(1.1)">'+pessoaSVG(p)+'<g transform="translate(0,-62)"><circle r="6.8" fill="#fff" stroke="#cbd5e1"/><text y="3" font-size="8.4" text-anchor="middle">'+H[0]+'</text></g></g>'
+     +'<title>'+esc(p.nome+' · '+p.fazendo)+'</title></g>';
+  }).join('')+'</g>';
+}
+function frente(lista){
+  var s=[], c=cor(D.cor,'#1d4ed8'), n=D.numeros;
+  var papeis=Math.min(n.novos,8), g='<g class="clic" data-k="novos">';
+  g+='<path d="M186 186 l4 -18 h30 l4 18z" fill="#475569"/><circle cx="205" cy="177" r="2.4" fill="#cbd5e1"/>';
+  for(var i=0;i<papeis;i++){ g+='<rect x="'+(268-(i%2))+'" y="'+(184-i*2.2-3)+'" width="26" height="3" fill="#fff" stroke="#cbd5e1" stroke-width=".5"/>'; }
+  g+='<rect x="160" y="184" width="150" height="6" rx="2" fill="#8b5a2b"/><rect x="166" y="190" width="138" height="16" fill="#6b4423"/>'
+   +'<rect x="210" y="193" width="50" height="9" rx="2" fill="#fde68a"/><text x="235" y="199.6" font-size="6" font-weight="800" text-anchor="middle" fill="#78350f">DIRETORIA</text>';
+  if(papeis) g+='<g class="mc-alerta"><circle cx="298" cy="168" r="7" fill="#ef4444"/><text x="298" y="171" font-size="8" font-weight="800" text-anchor="middle" fill="#fff">'+n.novos+'</text></g>';
+  s.push(g+'</g>');
+  [380,540].forEach(function(x0){ s.push('<g class="clic" data-k="sala" data-v="Atendimento"><rect x="'+(x0+24)+'" y="164" width="44" height="21" rx="2" fill="#334155"/><rect x="'+(x0+43)+'" y="185" width="6" height="2" fill="#334155"/>'
+    +'<rect x="'+x0+'" y="184" width="92" height="6" rx="2" fill="#f9a8d4"/><rect x="'+(x0+4)+'" y="190" width="84" height="16" fill="#e2e8f0" stroke="#cbd5e1"/></g>'); });
+  var prod=D.producao.slice(0,8), tot=prod.length;
+  var e='<g class="'+(tot?'':'mc-parado')+'"><rect x="28" y="352" width="470" height="12" rx="6" fill="#374151"/><path class="mc-rolo" d="M36 358 H490" stroke="#9ca3af" stroke-width="3"/>'
+   +'<rect x="50" y="364" width="5" height="10" fill="#4b5563"/><rect x="250" y="364" width="5" height="10" fill="#4b5563"/><rect x="470" y="364" width="5" height="10" fill="#4b5563"/>';
+  prod.forEach(function(p,i){ var cores=['#7c3aed','#ec4899','#0ea5e9','#f59e0b','#10b981','#ef4444'];
+    e+='<g class="mc-item clic" data-k="item" data-v="'+i+'" style="animation-delay:-'+(i*10/Math.max(1,tot)).toFixed(2)+'s"><g transform="translate(34,352)">'
+     +produto(tipo(p.cats[0]),cores[i%cores.length])+(p.atrasado&&!D.publico?'<circle cx="7" cy="-15" r="3" fill="#ef4444" class="mc-alerta"/>':'')+'</g></g>'; });
+  s.push(e+'</g>');
+  var naPausa=lista.filter(function(o){return o.vis&&o.p.estado==='pausa';});
+  s.push('<g class="clic" data-k="sala" data-v="Cafeteria"><rect x="572" y="350" width="126" height="5" rx="2" fill="#78350f"/><rect x="578" y="355" width="114" height="17" fill="#a16207"/>'
+   +naPausa.map(function(o){return '<rect x="'+(o.x-14)+'" y="344" width="5" height="6" rx="1" fill="#fff" stroke="#92400e" stroke-width=".5"/>';}).join('')+'</g>');
+  var emb=lista.some(function(o){return o.vis&&o.p.setor==='Expedição'&&o.p.estado!=='pausa';});
+  s.push('<g class="clic" data-k="sala" data-v="Expedição">'+(emb?'<path d="M420 490 v-12 h32 v12z" fill="#d6a15c" stroke="#8a5a24"/><path d="M420 478 l-6 -6 M452 478 l6 -6" stroke="#8a5a24" stroke-width="2"/>':'')
+   +'<rect x="486" y="478" width="28" height="12" rx="2" fill="#1f2937"/><rect x="491" y="472" width="18" height="7" fill="#fff"/><circle cx="372" cy="486" r="4" fill="none" stroke="#a16207" stroke-width="3"/>'
+   +'<rect x="352" y="490" width="176" height="5" rx="2" fill="#94a3b8"/><rect x="358" y="495" width="164" height="18" fill="#cbd5e1" stroke="#94a3b8"/></g>');
+  return s.join('');
+}
+function casas(noite){
+  var s=[], cores=['#fde68a','#bbf7d0','#fbcfe8'];
+  for(var i=0;i<3;i++){
+    var hx=726+i*92, e=D.entregas[i];
+    s.push('<g class="clic" data-k="casa" data-v="'+i+'"><rect x="'+hx+'" y="490" width="72" height="53" fill="'+cores[i]+'" stroke="#a8a29e"/>'
+     +'<path d="M'+(hx-6)+' 492 L'+(hx+36)+' 460 L'+(hx+78)+' 492z" fill="#b45309" stroke="#92400e"/>'
+     +'<rect x="'+(hx+29)+'" y="515" width="14" height="28" fill="#7c2d12"/><circle cx="'+(hx+40)+'" cy="530" r="1.2" fill="#fde68a"/>'
+     +'<rect x="'+(hx+8)+'" y="500" width="15" height="12" fill="'+(noite?'#fde047':'#bae6fd')+'" stroke="#fff"/><rect x="'+(hx+49)+'" y="500" width="15" height="12" fill="'+(noite?'#fde047':'#bae6fd')+'" stroke="#fff"/>'
+     +'<rect x="'+(hx+60)+'" y="526" width="8" height="6" fill="#1d4ed8"/><rect x="'+(hx+63)+'" y="532" width="2" height="11" fill="#475569"/>');
+    if(e){ s.push('<g class="mc-pino"><path d="M'+(hx+36)+' 456 c-9 -10 -9 -22 0 -22 c9 0 9 12 0 22z" fill="#ef4444"/><circle cx="'+(hx+36)+'" cy="441" r="3.6" fill="#fff"/></g>'
+       +'<rect x="'+(hx-4)+'" y="545" width="80" height="10" rx="5" fill="rgba(17,24,39,.85)"/><text x="'+(hx+36)+'" y="552.4" font-size="5.6" text-anchor="middle" fill="#fff">📍 '+esc(corta(e.cidade,22))+'</text>'); }
+    s.push('</g>');
+  }
+  s.push('<g><rect x="806" y="512" width="4" height="31" fill="#78350f"/><circle cx="808" cy="506" r="10" fill="#16a34a"/><rect x="898" y="512" width="4" height="31" fill="#78350f"/><circle cx="900" cy="506" r="10" fill="#15803d"/></g>');
+  return s.join('');
+}
+function vanSVG(){
+  var c=cor(D.cor,'#1d4ed8'), mot=null;
+  D.equipe.forEach(function(p){if(!mot&&p.setor==='Entrega')mot=p;});
+  var pele=mot?cor(mot.pele,'#C68642'):'#C68642';
+  return '<g id="van" class="clic" data-k="van" transform="translate('+vanPos.x.toFixed(1)+','+vanPos.y.toFixed(1)+')"><g id="vanc"'+(vanEsq?' transform="scale(-1,1)"':'')+'>'
+   +'<ellipse cx="0" cy="1" rx="47" ry="4" fill="rgba(0,0,0,.25)"/>'
+   +'<rect x="-44" y="-36" width="70" height="30" rx="4" fill="#fff" stroke="#334155" stroke-width="1.2"/>'
+   +'<path d="M26 -36 h7 q9 0 12 11 l3 8 v11 h-22z" fill="#fff" stroke="#334155" stroke-width="1.2"/>'
+   +'<path d="M29 -33 h4 q6 0 8 9 h-12z" fill="#93c5fd" stroke="#334155" stroke-width=".6"/>'
+   +(D.entregas.length?'<circle cx="33" cy="-25.5" r="3.4" fill="'+pele+'"/><path d="M29.6 -26.5 a3.4 3.4 0 0 1 6.8 0z" fill="'+(mot?cor(mot.camisa,'#1f2937'):'#1f2937')+'"/>':'')
+   +'<rect x="-44" y="-22" width="70" height="5" fill="'+c+'"/><rect x="44" y="-14" width="4" height="4" rx="1" fill="#fde047"/><rect x="-46" y="-12" width="3" height="5" fill="#ef4444"/>'
+   +'<circle cx="-26" cy="-6" r="6.5" fill="#111827"/><circle cx="-26" cy="-6" r="2.8" fill="#9ca3af"/><circle cx="32" cy="-6" r="6.5" fill="#111827"/><circle cx="32" cy="-6" r="2.8" fill="#9ca3af"/>'
+   +'</g><text id="vant" x="'+(vanEsq?9:-9)+'" y="-26.5" font-size="8" font-weight="800" fill="'+c+'" text-anchor="middle">ENTREGA</text>'
+   +'<g id="vanbal" style="display:none"><rect x="-62" y="-60" width="124" height="17" rx="8.5" fill="#111827"/><text id="vanbalt" x="0" y="-48.6" font-size="7.6" fill="#fff" text-anchor="middle"></text></g></g>';
+}
+function render(){
+  var h=new Date().getHours(), noite=(h>=19||h<6), lista=posicoes();
+  svg.innerHTML=cenario(noite)+pessoas(lista)+frente(lista)+casas(noite)+vanSVG();
+  animarPessoas();
+  iniciarVan();
+  if(popAberto) abrir(popAberto[0],popAberto[1]);
+}
+function animarPessoas(){
+  var novos={};
+  Array.prototype.forEach.call(svg.querySelectorAll('g.pessoa'),function(g){
+    var id=g.getAttribute('data-id'), x=+g.getAttribute('data-x'), y=+g.getAttribute('data-y'), a=posAnt[id];
+    novos[id]=[x,y];
+    if(a&&(a[0]!==x||a[1]!==y)){
+      g.style.transition='none';
+      if(Math.abs(a[1]-y)<40){ g.style.transform='translate('+a[0]+'px,'+a[1]+'px)'; }
+      else { g.style.opacity='0'; }
+      g.getBoundingClientRect();
+      requestAnimationFrame(function(){ g.style.transition=''; g.style.transform='translate('+x+'px,'+y+'px)'; g.style.opacity='1'; });
+    }
+  });
+  posAnt=novos;
+}
+function iniciarVan(){
+  var ent=D.entregas.slice(0,3), assin=ent.map(function(e){return e.id;}).join(',');
+  if(assin===vanAssin&&(vanRota||!ent.length)) return;
+  vanAssin=assin;
+  if(ent.length){
+    var r=[{x:622,y:614}];
+    ent.forEach(function(e,i){ r.push({x:762+i*92,y:614,espera:2600,txt:'📦 Entregando '+e.id}); });
+    r.push({x:975,y:614}); r.push({x:975,y:584}); r.push({x:622,y:584});
+    r.push({x:GARAGEM.x,y:GARAGEM.y,espera:3200,txt:'🅿️ De volta na garagem'});
+    vanRota=r; vanCiclo=true;
+  } else { vanRota=[{x:622,y:584},{x:GARAGEM.x,y:GARAGEM.y,txt:'🅿️ Van na garagem'}]; vanCiclo=false; }
+  vanSeg=0; vanEspera=0;
+}
+function balao(txt,ms){
+  var b=document.getElementById('vanbal'), t=document.getElementById('vanbalt'); if(!b||!txt) return;
+  t.textContent=txt; b.style.display=''; clearTimeout(balao.t); balao.t=setTimeout(function(){var bb=document.getElementById('vanbal'); if(bb) bb.style.display='none';},ms||2500);
+}
+function virar(esq){
+  if(esq===vanEsq) return; vanEsq=esq;
+  var g=document.getElementById('vanc'), t=document.getElementById('vant');
+  if(g) g.setAttribute('transform',esq?'scale(-1,1)':''); if(t) t.setAttribute('x',esq?9:-9);
+}
+function passoVan(t){
+  var dt=Math.min(64,t-(vanUlt||t)); vanUlt=t;
+  var g=document.getElementById('van');
+  if(g&&vanRota){
+    if(vanEspera>0){ vanEspera-=dt; }
+    else {
+      var alvo=vanRota[vanSeg], dx=alvo.x-vanPos.x, dy=alvo.y-vanPos.y, dist=Math.sqrt(dx*dx+dy*dy), v=0.085*dt;
+      if(dist<=v){
+        vanPos.x=alvo.x; vanPos.y=alvo.y;
+        if(alvo.txt) balao(alvo.txt,alvo.espera||2500);
+        if(alvo.espera) vanEspera=alvo.espera;
+        if(vanSeg<vanRota.length-1) vanSeg++; else if(vanCiclo) vanSeg=0; else vanRota=null;
+      } else { vanPos.x+=dx/dist*v; vanPos.y+=dy/dist*v; if(Math.abs(dx)>0.5) virar(dx<0); }
+    }
+    g.setAttribute('transform','translate('+vanPos.x.toFixed(1)+','+vanPos.y.toFixed(1)+')');
+  }
+  requestAnimationFrame(passoVan);
+}
+requestAnimationFrame(passoVan);
+
+function btn(txt,key,pri){ if(D.publico||!key) return ''; return '<button class="ac'+(pri?' pri':'')+'" data-key="'+esc(key)+'">'+esc(txt)+'</button>'; }
+function nav(txt,k){ return k?btn(txt,'mc_nav_'+k):''; }
+function linha(a,b){ return '<div class="lin"><span>'+esc(a)+'</span><b>'+esc(b)+'</b></div>'; }
+function membrosProducao(){ return D.equipe.filter(function(x){return x.setor==='Produção';}); }
+function cardNovo(p){ return '<div class="ped"><b>'+esc(p.id)+'</b> · '+esc(p.nome)+(p.total?'<span style="float:right;font-weight:700">'+esc(p.total)+'</span>':'')
+  +'<br><small>'+esc(p.itens)+'</small><br><small>⏱️ esperando '+esc(p.espera)+' · 📍 '+esc(p.cidade)+'</small>'
+  +'<div class="acoes">'+btn('✅ Autorizar','mc_apr_'+p.id,1)+btn('❌ Recusar','mc_rec_'+p.id)+'</div></div>'; }
+function cardProd(p){ var q=membrosProducao()[p.quem];
+  return '<div class="ped"><b>'+esc(p.id)+'</b> · '+esc(p.nome)+(p.atrasado&&!D.publico?' <span class="humor" style="background:#fee2e2;color:#991b1b">atrasado</span>':'')
+  +'<br><small>'+esc(p.itens)+'</small><br><small>👷 '+esc(q?q.nome:'equipe da produção')+' · na fila há '+esc(p.espera)+'</small>'
+  +'<div class="acoes">'+btn('📦 Pronto, enviar','mc_env_'+p.id,1)+'</div></div>'; }
+function cardEnt(e){ return '<div class="ped"><b>'+esc(e.id)+'</b> · '+esc(e.nome)+(e.atrasado&&!D.publico?' ⚠️ atrasado':'')
+  +'<br><small>📍 '+(e.endereco?esc(e.endereco)+' - ':'')+esc(e.cidade)+(e.cep?' · CEP '+esc(e.cep):'')+'</small>'
+  +'<br><small>📦 '+esc(e.itens)+'</small><br><small>🚚 '+esc(e.transportadora)+(e.codigo?' · código '+esc(e.codigo):(D.publico?'':' · sem código de rastreio'))+(e.previsao?' · previsão '+esc(e.previsao):'')+'</small>'
+  +'<div class="acoes">'+btn('✅ Entregue','mc_ent_'+e.id,1)+'</div></div>'; }
+function listaEstoque(){ if(!D.estoque.length) return '<p class="vazio">Nenhum material cadastrado ainda.</p>';
+  return D.estoque.map(function(m){ return '<div class="ev">'+(m.repor&&!D.publico?'⚠️':'📦')+' <b>'+esc(m.material)+'</b> · tem '+esc(m.qtd)+' '+esc(m.unidade)+(m.repor&&!D.publico?' · comprar '+esc(m.comprar):'')+'</div>'; }).join(''); }
+function listaPessoas(filtro){ var r=''; D.equipe.forEach(function(p,i){ if(filtro(p)){ var H=HUMOR[p.humor]||HUMOR.feliz; r+='<div class="ev clicavel" data-pessoa="'+i+'">'+H[0]+' <b>'+esc(p.nome)+'</b> · '+esc(p.fazendo)+'</div>'; } }); return r||'<p class="vazio">Ninguém aqui agora.</p>'; }
+function abrir(k,v){
+  var t='', c='';
+  if(k==='p'){
+    var p=D.equipe[+v]; if(!p){fechar();return;}
+    var H=HUMOR[p.humor]||HUMOR.feliz; t=p.nome+' · '+p.cargo;
+    c=linha('Setor',p.setor)+'<div class="lin"><span>Agora</span><b style="max-width:72%">'+esc(p.fazendo)+'</b></div>'
+     +'<div class="lin"><span>Humor</span><span class="humor" style="background:'+H[2]+';color:'+H[3]+'">'+H[0]+' '+H[1]+'</span></div>'
+     +(p.motivo?'<div class="motivo">💭 '+esc(p.motivo)+'</div>':'')+(p.rendimento?linha('Rendimento',p.rendimento):'');
+    if(p.setor==='Diretoria') c+='<h4>Pedidos esperando autorização</h4>'+(D.novos.map(cardNovo).join('')||'<p class="vazio">Nenhum pedido esperando.</p>')+'<div class="acoes">'+nav('🧾 Abrir pedidos','pedidos')+'</div>';
+    else if(p.setor==='Produção'){ var meus=D.producao.filter(function(x){return p.ids.indexOf(x.id)>=0;}); c+='<h4>Na bancada</h4>'+(meus.map(cardProd).join('')||'<p class="vazio">Sem pedido agora.</p>')+'<div class="acoes">'+nav('🖨️ Artes para imprimir','artes')+'</div>'; }
+    else if(p.setor==='Entrega') c+='<h4>Entregas</h4>'+(D.entregas.map(cardEnt).join('')||'<p class="vazio">Nenhuma entrega.</p>')+'<div class="acoes">'+nav('🚚 Abrir rastreio','rastreio')+'</div>';
+    else if(p.setor==='Atendimento'){ var mm=D.novos.filter(function(x){return p.ids.indexOf(x.id)>=0;}); c+=(mm.length?'<h4>Clientes com ele(a)</h4>'+mm.map(cardNovo).join(''):'')+'<div class="acoes">'+nav('👥 Abrir clientes','clientes')+'</div>'; }
+    else if(p.setor==='Estoque') c+='<h4>Prateleiras</h4>'+listaEstoque()+'<div class="acoes">'+nav('🏭 Abrir estoque','estoque')+'</div>';
+    else c+='<div class="acoes">'+nav('🏷️ Abrir etiquetas','etiquetas')+'</div>';
+  } else if(k==='novos'){ t='📋 Mesa do diretor'; c=(D.novos.map(cardNovo).join('')||'<p class="vazio">Nenhum pedido esperando autorização.</p>')+'<div class="acoes">'+nav('🧾 Abrir pedidos','pedidos')+'</div>';
+  } else if(k==='item'){ var pi=D.producao[+v]; if(!pi){fechar();return;} t='⚙️ Na esteira'; c=cardProd(pi);
+  } else if(k==='van'){ t='🚚 Van de entrega'; c=(D.entregas.length?'<p class="vazio">Rota na ordem das casas:</p>'+D.entregas.map(cardEnt).join(''):'<p class="vazio">Van na garagem. Nenhum pedido a caminho.</p>')+'<div class="acoes">'+nav('🚚 Abrir rastreio','rastreio')+nav('🏷️ Etiquetas','etiquetas')+'</div>';
+  } else if(k==='casa'){ var ec=D.entregas[+v]; t='🏠 Casa do cliente'; c=ec?cardEnt(ec):'<p class="vazio">Nenhuma entrega para esta casa agora.</p>';
+  } else if(k==='prat'){ var m=D.estoque[+v]; t='📦 Prateleira';
+    c=m?(linha('Material',m.material)+linha('Tem',m.qtd+' '+m.unidade)+linha('Mínimo',m.minimo)+(m.dias?linha('Dura cerca de',m.dias+' dia(s)'):'')+(m.fornecedor?linha('Fornecedor',m.fornecedor):'')
+      +(m.repor&&!D.publico?'<div class="motivo" style="color:#991b1b">⚠️ Precisa repor: comprar '+esc(m.comprar)+' '+esc(m.unidade)+'</div>':'<div class="motivo">✅ Quantidade boa</div>'))
+      :'<p class="vazio">Prateleira vazia. Cadastre os materiais no painel, em Estoque e compras.</p>';
+    c+='<div class="acoes">'+nav('🏭 Abrir estoque','estoque')+'</div>';
+  } else if(k==='tv'||k==='prod'){ var n=D.numeros; t=k==='tv'?'📊 Painel da parede':'⚙️ Quadro da produção';
+    c=linha('Pedidos hoje',n.hoje)+(n.fat?linha('Faturamento hoje',n.fat):'')+linha('Esperando autorização',n.novos)+linha('Na produção',n.producao)+linha('A caminho',n.caminho)+linha('Entregues em 7 dias',n.entregues)
+     +(D.publico?'':linha('Atrasados',n.atrasados)+linha('Materiais para repor',n.repor));
+    if(k==='prod') c+='<h4>Na esteira</h4>'+(D.producao.map(cardProd).join('')||'<p class="vazio">Esteira parada.</p>');
+    c+='<h4>Últimos acontecimentos</h4>'+(D.eventos.map(function(x){return '<div class="ev">'+esc(x)+'</div>';}).join('')||'<p class="vazio">Nada ainda.</p>')+'<div class="acoes">'+nav('📊 Abrir resumo','resumo')+'</div>';
+  } else if(k==='sala'){ var S=SALAS[v]; if(!S){fechar();return;} t=S[0];
+    c='<p class="vazio">'+esc(S[1])+'</p><h4>Quem está aqui</h4>'+listaPessoas(v==='Cafeteria'?function(p){return p.estado==='pausa';}:function(p){return p.setor===S[3]&&p.estado!=='pausa';});
+    if(v==='Diretoria') c+='<h4>Esperando autorização</h4>'+(D.novos.map(cardNovo).join('')||'<p class="vazio">Nenhum.</p>');
+    if(v==='Produção') c+='<h4>Na esteira</h4>'+(D.producao.map(cardProd).join('')||'<p class="vazio">Esteira parada.</p>');
+    if(v==='Estoque') c+='<h4>Prateleiras</h4>'+listaEstoque();
+    if(v==='Garagem') c+='<h4>Entregas</h4>'+(D.entregas.map(cardEnt).join('')||'<p class="vazio">Nenhuma.</p>');
+    c+='<div class="acoes">'+nav('Abrir no painel',S[2])+'</div>';
+  } else { fechar(); return; }
+  popAberto=[k,v];
+  pop.innerHTML='<div class="cab"><b>'+esc(t)+'</b><button class="x" data-fechar="1" title="Fechar">✕</button></div><div class="corpo">'+c+'</div>';
+  pop.style.display='block';
+}
+function fechar(){ popAberto=null; pop.style.display='none'; }
+function aviso(txt){ avisoEl.textContent=txt; avisoEl.style.display='block'; clearTimeout(aviso.t); aviso.t=setTimeout(function(){avisoEl.style.display='none';},2600); }
+function acionar(chave){
+  try{ var b=window.parent.document.querySelector('.st-key-'+chave+' button');
+    if(b){ b.click(); aviso('✅ Feito! Atualizando a fábrica…'); fechar(); return; } }catch(e){}
+  aviso('Não deu para fazer por aqui. Abra o painel e tente de novo.');
+}
+svg.addEventListener('click',function(e){ var t=e.target.closest('[data-k]'); if(!t||t.getAttribute('data-k')==='fundo'){fechar();return;} abrir(t.getAttribute('data-k'),t.getAttribute('data-v')); });
+pop.addEventListener('click',function(e){ var b=e.target.closest('[data-key],[data-fechar],[data-pessoa]'); if(!b) return;
+  if(b.getAttribute('data-fechar')) fechar(); else if(b.getAttribute('data-pessoa')!=null) abrir('p',b.getAttribute('data-pessoa')); else acionar(b.getAttribute('data-key')); });
+setInterval(function(){ var r=document.getElementById('relogio'); if(r) r.textContent=new Date().toLocaleTimeString('pt-BR'); },1000);
+var evI=0; setInterval(function(){ var e=document.getElementById('evento'); if(e&&D&&D.eventos.length){ e.textContent='🔔 '+D.eventos[evI%D.eventos.length]; evI++; } },3500);
+function mcAtualizar(d){ D=d; render(); }
+window.mcAtualizar=mcAtualizar;
+</script>
+<!--DADOS-->
+</body></html>
+"""
 
 
 # ===============================================================
@@ -1661,11 +2666,51 @@ if st.session_state.admin:
         av2.button("📦 Ver e repor", key="aviso_estoque", type="primary", use_container_width=True,
                    on_click=ir_secao, args=("🏭 Estoque e compras",))
 
-    # ---------------------------------------------------------- EMPRESA AO VIVO (miniatura)
+    # ----- Mini fábrica: grande nesta seção, janela flutuante (arrastável) nas outras -----
+    if secao != "🏙️ Empresa ao vivo":
+        if LOJA.get("mini_no_painel", True):
+            mini_cidade("admin")
+        else:
+            esconder_cidade()
+
+    # ---------------------------------------------------------- EMPRESA AO VIVO (mini fábrica)
     if secao == "🏙️ Empresa ao vivo":
-        st.caption("Sua empresa em miniatura, trabalhando com os pedidos de verdade. "
-                   "Toque nos botões de cada setor para agir.")
-        cena_ao_vivo()
+        st.caption("Sua empresa em miniatura, trabalhando com os pedidos de verdade. Clique em qualquer coisa: "
+                   "pessoas, salas, painel da parede, esteira, prateleiras, van e casas dos clientes.")
+        mini_cidade("painel")
+        with st.expander("👥 Minha equipe (nomes reais, setores e aparência dos bonequinhos)"):
+            st.caption("Cada pessoa aparece no setor escolhido. Camisa: cor em código (ex.: #2563eb). "
+                       "Desmarque 'Ativo' para tirar alguém da fábrica sem apagar.")
+            eq_df = pd.DataFrame(carregar_equipe())
+            for c in ["nome", "cargo", "setor", "pele", "cabelo", "estilo", "camisa", "ativo"]:
+                if c not in eq_df.columns:
+                    eq_df[c] = True if c == "ativo" else ""
+            eq_edit = st.data_editor(
+                eq_df[["nome", "cargo", "setor", "pele", "cabelo", "estilo", "camisa", "ativo"]],
+                num_rows="dynamic", use_container_width=True, key="editor_equipe",
+                column_config={
+                    "nome": st.column_config.TextColumn("Nome", required=True),
+                    "cargo": st.column_config.TextColumn("Cargo"),
+                    "setor": st.column_config.SelectboxColumn("Setor", options=SETORES, required=True),
+                    "pele": st.column_config.SelectboxColumn("Tom de pele", options=list(TONS_PELE)),
+                    "cabelo": st.column_config.SelectboxColumn("Cabelo", options=list(CORES_CABELO)),
+                    "estilo": st.column_config.SelectboxColumn("Estilo", options=ESTILOS_CABELO),
+                    "camisa": st.column_config.TextColumn("Cor da camisa"),
+                    "ativo": st.column_config.CheckboxColumn("Ativo"),
+                })
+            q1, q2 = st.columns(2)
+            if q1.button("💾 Salvar equipe", type="primary", key="salvar_equipe"):
+                lista = eq_edit.dropna(subset=["nome"]).fillna("").to_dict("records")
+                for m in lista:
+                    m["ativo"] = bool(m.get("ativo", True))
+                gravar_json(ARQ_EQUIPE, lista)
+                st.rerun()
+            novo_mini = q2.toggle("Mostrar a janela flutuante nas outras telas do painel",
+                                  value=bool(LOJA.get("mini_no_painel", True)), key="tg_mini_painel")
+            if novo_mini != bool(LOJA.get("mini_no_painel", True)):
+                LOJA["mini_no_painel"] = novo_mini
+                gravar_loja(LOJA)
+                st.rerun()
         pedidos_v = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
         s1, s2, s3, s4 = st.columns(4)
         with s1, st.container(border=True):
@@ -1852,6 +2897,29 @@ if st.session_state.admin:
                 else:
                     st.error("Escolha a categoria e digite o nome.")
 
+        def salvar_pref(chave_loja: str, chave_estado: str):
+            LOJA[chave_loja] = int(st.session_state[chave_estado])
+            gravar_loja(LOJA)
+
+        titulo_secao("🔢 Grade de produtos")
+        o1, o2, o3 = st.columns(3)
+        op_cols, op_pp = [2, 3, 4, 5, 6, 8], [4, 8, 12, 16, 20, 24, 32, 48, 100]
+        cols_adm = int(LOJA.get("adm_grade_colunas", 4))
+        pp_adm = int(LOJA.get("adm_grade_por_pagina", 8))
+        o1.selectbox("Produtos por linha (aqui no painel)", op_cols,
+                     index=op_cols.index(cols_adm) if cols_adm in op_cols else 2, key="adm_cols",
+                     on_change=salvar_pref, args=("adm_grade_colunas", "adm_cols"))
+        o2.selectbox("Produtos por página (aqui no painel)", op_pp,
+                     index=op_pp.index(pp_adm) if pp_adm in op_pp else 1, key="adm_pp",
+                     on_change=salvar_pref, args=("adm_grade_por_pagina", "adm_pp"))
+        op_loja = {0: "Automático", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6"}
+        cols_loja = int(LOJA.get("loja_grade_colunas", 0))
+        o3.selectbox("Modelos por linha na loja (o que o cliente vê)", list(op_loja),
+                     format_func=lambda v: op_loja[v], key="loja_cols",
+                     index=list(op_loja).index(cols_loja) if cols_loja in op_loja else 0,
+                     on_change=salvar_pref, args=("loja_grade_colunas", "loja_cols"))
+        COLS_ADM = int(st.session_state.get("adm_cols", cols_adm))
+
         f1, f2, f3, f4 = st.columns([2, 2, 1, 1])
         busca_p = f1.text_input("🔎 Buscar produto", key="busca_prod")
         filtro_cat = f2.selectbox("Categoria", ["Todas"] + sorted(df_produtos["categoria"].unique().tolist()),
@@ -1865,17 +2933,18 @@ if st.session_state.admin:
             vista_p = vista_p[vista_p["categoria"] == filtro_cat]
         if so_alertas:
             vista_p = vista_p[(vista_p["custo"] > vista_p["preco"]) | (vista_p["imagem"] == "")]
-        POR_PAGINA = 8
+        POR_PAGINA = int(st.session_state.get("adm_pp", pp_adm))
         total_pag = max(1, (len(vista_p) + POR_PAGINA - 1) // POR_PAGINA)
         pagina = f4.number_input(f"Página (de {total_pag})", min_value=1, max_value=total_pag,
                                  value=1, step=1, key="pag_prod")
         trecho = vista_p.iloc[(pagina - 1) * POR_PAGINA: pagina * POR_PAGINA]
         st.caption(f"{len(vista_p)} produto(s) encontrado(s).")
 
-        cols_p = st.columns(4)
         for n, (_, prod) in enumerate(trecho.iterrows()):
+            if n % COLS_ADM == 0:
+                cols_p = st.columns(COLS_ADM)
             pos = int(prod["_pos"])
-            with cols_p[n % 4], st.container(border=True):
+            with cols_p[n % COLS_ADM], st.container(border=True):
                 mostrar_imagem(prod["imagem"], prod["categoria"], prod["modelo"], classe="cat-img")
                 efetivo, em_promo = preco_atual(prod)
                 st.markdown(f"**{prod['modelo']}**  \nR$ {efetivo:.2f} · _{prod['categoria']}_")
@@ -2146,11 +3215,14 @@ if st.session_state.admin:
         b1, b2 = st.columns(2)
         if b1.button("💾 Salvar pedidos", type="primary", key="salvar_pedidos"):
             completo = pedidos.drop(columns=["total_num"]).copy()
+            antes_st = dict(zip(completo["id_pedido"], completo["status"]))
             for _, linha in ped_editado.iterrows():
                 alvo = completo["id_pedido"] == linha["id_pedido"]
                 for campo in ["email", "status", "pagamento", "forma_pagamento", "obs_internas"]:
                     completo.loc[alvo, campo] = linha[campo]
             gravar_csv(ARQ_PEDIDOS, completo)
+            for _, linha in ped_editado.iterrows():
+                depois_de_mudar_status(linha["id_pedido"], antes_st.get(linha["id_pedido"]), linha["status"])
             st.rerun()
         b2.download_button("⬇️ Baixar pedidos (CSV)",
                            pedidos.drop(columns=["total_num"]).to_csv(index=False).encode("utf-8"),
@@ -2197,6 +3269,7 @@ if st.session_state.admin:
                                      "link_rastreio": r_link.strip()}.items():
                     pedidos.loc[alvo, campo] = valor
                 gravar_csv(ARQ_PEDIDOS, pedidos)
+                depois_de_mudar_status(id_sel, ped["status"], r_status)
                 st.success("Rastreio salvo! O cliente já vê em Acompanhar meu pedido.")
                 st.rerun()
             link = ped["link_rastreio"] or TRANSPORTADORAS.get(ped["transportadora"], "") or LOJA.get("link_loja", "")
@@ -2225,7 +3298,7 @@ if st.session_state.admin:
             for p in lista:
                 cep = "".join(c for c in str(p["ent_cep"]) if c.isdigit())
                 cep_fmt = f"{cep[:5]}-{cep[5:]}" if len(cep) == 8 else e(p["ent_cep"])
-                itens = [i.strip("- ").strip() for i in str(p["itens"]).split("|")[0].split(";") if i.strip()]
+                itens = [i.strip("- ").strip() for i in str(p["itens"]).split(" | Frete")[0].split(";") if i.strip()]
                 lista_itens = "".join(f"<li>{e(i)}</li>" for i in itens) or "<li>(sem itens)</li>"
                 end1 = f"{e(p['ent_rua'])}, {e(p['ent_numero'] or 'S/N')}"
                 if p["ent_complemento"]:
@@ -2433,7 +3506,8 @@ body {{ font-family: Arial, sans-serif; margin: 0; color: #000; }}
             """Folha para imprimir a arte no tamanho exato, em centímetros."""
             e = lambda v: html.escape(str(v or ""))
             ajuste = "contain" if encaixe.startswith("Caber") else "cover"
-            giro = "transform: scaleX(-1);" if espelhar else ""
+            mover = f"translate({float(a.get('dx', 0) or 0) / 2:.0f}%, {float(a.get('dy', 0) or 0) / 2:.0f}%)"
+            giro = f"transform: {'scaleX(-1) ' if espelhar else ''}{mover};"
             linha = "1px dashed #555" if borda else "none"
             fonte = CSS_FONTES.get(a.get("fonte") or "Padrão", "Arial, sans-serif")
             alt_img = escala * (0.75 if a.get("texto") else 1)
@@ -2983,7 +4057,7 @@ Na aba *Notas dos pedidos* existe um botão que gera a declaração pronta para 
                 l_cor = c1.color_picker("Cor principal", value=LOJA["cor_principal"])
                 l_fundo = c2.selectbox("Fundo da página", FUNDOS,
                                        index=FUNDOS.index(LOJA["fundo"]) if LOJA["fundo"] in FUNDOS else 0)
-                l_mini = c1.checkbox("Mostrar a telinha da equipe ao vivo na loja",
+                l_mini = c1.checkbox("Mostrar a fábrica ao vivo (janela flutuante) na loja",
                                      value=bool(LOJA.get("mostrar_mini", True)))
             with t2:
                 c1, c2 = st.columns([2, 1])
@@ -3406,7 +4480,10 @@ if VITRINE:
     m2.button("🎬 Vitrine", use_container_width=True, on_click=ir_para, args=("vitrine",), key="nav_vitrine")
 if m3.button("🙋 Sou cliente", use_container_width=True, key="modo_cliente",
              type="primary" if st.session_state.modo != "empresa" else "secondary"):
-    st.session_state.update(modo="cliente", carrinho=[], frete=None)
+    if st.session_state.modo == "empresa":  # só limpa o carrinho quando troca de empresa para cliente
+        st.session_state.update(modo="cliente", carrinho=[], frete=None)
+    else:
+        st.session_state.modo = "cliente"
     st.rerun()
 if m4.button("🏢 Sou empresa", use_container_width=True, key="modo_empresa",
              type="primary" if st.session_state.modo == "empresa" else "secondary"):
@@ -3422,7 +4499,9 @@ barra_redes(LOJA)
 
 # ----- Telinha flutuante: a equipe em miniatura trabalhando ao vivo (canto de baixo, à direita) -----
 if LOJA.get("mostrar_mini", True):
-    cena_ao_vivo(flutuante=True)
+    mini_cidade("loja")  # versão para o cliente: sem nomes, endereços nem valores
+else:
+    esconder_cidade()
 
 if modo_empresa():
     emp = st.session_state.empresa
@@ -3457,15 +4536,21 @@ elif pagina == "categoria" and st.session_state.categoria_aberta in CATALOGO:
     busca = st.text_input("🔎 Buscar nesta categoria", key=f"busca_{cat_nome}")
     if busca.strip():
         itens = [i for i in itens if busca.strip().lower() in i["nome"].lower()]
-    colunas = 5 if len(itens) > 8 else 4
+    colunas = int(LOJA.get("loja_grade_colunas", 0)) or (5 if len(itens) > 8 else 4)
     for inicio in range(0, len(itens), colunas):
         cols = st.columns(colunas)
         for idx, item in enumerate(itens[inicio:inicio + colunas]):
             with cols[idx], st.container(border=True):
-                mostrar_imagem(item["imagem"], cat_nome, item["nome"], classe="cat-img")
+                # A foto inteira é clicável e abre os detalhes, igual ao botão
+                clicou_foto = area_clicavel(f"prod_{item['id']}",
+                                            html_imagem(item["imagem"], cat_nome, item["nome"], classe="cat-img",
+                                                        zoom=False, dica="🔍 Ver detalhes"),
+                                            dica="Ver detalhes")
                 selo = "<span class='selo selo-promo'>PROMOÇÃO</span> " if item["em_promo"] else ""
                 st.markdown(f"{selo}**{item['nome']}**  \nR$ {item['preco']:.2f}", unsafe_allow_html=True)
-                if st.button("🔍 Ver detalhes", key=f"ver_{item['id']}", use_container_width=True, type="primary"):
+                clicou_botao = st.button("🔍 Ver detalhes", key=f"ver_{item['id']}", use_container_width=True,
+                                         type="primary")
+                if clicou_foto or clicou_botao:
                     abrir_produto(item)
 
 else:
@@ -3481,10 +4566,13 @@ else:
         for idx, cat_nome in enumerate(categorias[inicio:inicio + colunas]):
             destaque = CATALOGO[cat_nome]["destaque"]
             with cols[idx], st.container(border=True):
-                mostrar_imagem(destaque["imagem"], cat_nome, cat_nome, classe="cat-img")
+                clicou_foto = area_clicavel(f"cat{inicio + idx}",
+                                            html_imagem(destaque["imagem"], cat_nome, cat_nome, classe="cat-img",
+                                                        zoom=False, dica="Ver modelos"),
+                                            dica="Ver modelos")
                 st.markdown(f"**{cat_nome}**  \nA partir de R$ {destaque['preco']:.2f}")
                 if st.button(f"Ver {len(CATALOGO[cat_nome]['itens'])} modelos", key=f"btn_cat_{cat_nome}",
-                             use_container_width=True):
+                             use_container_width=True) or clicou_foto:
                     registrar_clique("abriu_categoria", cat_nome)
                     ir_para("categoria", cat_nome)
                     st.rerun()
