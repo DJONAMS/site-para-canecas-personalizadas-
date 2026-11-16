@@ -2865,19 +2865,44 @@ if st.session_state.admin:
             st.button("👁️ Ver interesse dos visitantes", key="res_int", on_click=ir_secao, args=("👁️ Interesse",))
     # ---------------------------------------------------------- PRODUTOS
     elif secao == "📦 Produtos":
+        def criar_modelos(categoria: str, nome_base: str, qtd: int, preco: float, visivel: bool,
+                          numerar: bool = False) -> int:
+            """Cria vários modelos de uma vez: Nome Modelo 1, Nome Modelo 2... sem repetir nomes que já existem."""
+            existentes = set(df_produtos["modelo"].astype(str))
+            ficha = FICHA_PADRAO.get(categoria, ("", "", "", ""))
+            linhas, n = [], 0
+            while len(linhas) < qtd:
+                n += 1
+                nome = nome_base if (qtd == 1 and n == 1 and not numerar) else f"{nome_base} Modelo {n}"
+                if nome in existentes:
+                    continue
+                linha = {c: "" for c in COLUNAS_PRODUTOS}
+                linha.update({"categoria": categoria, "modelo": nome, "preco": preco, "ativo": visivel,
+                              "destaque": False, "estoque": 0, "custo": 0.0, "peso_g": 0,
+                              "prazo_producao_dias": 5, "preco_promocional": 0.0,
+                              "descricao": ficha[0], "para_que_serve": ficha[1], "medidas": ficha[2],
+                              "dicas": ficha[3], "sku": f"{categoria[:3].upper()}-{len(existentes) + len(linhas) + 1:03d}"})
+                linhas.append(linha)
+                existentes.add(nome)
+            gravar_csv(ARQ_PRODUTOS, pd.concat([df_produtos, pd.DataFrame(linhas)], ignore_index=True))
+            return len(linhas)
+
+        if st.session_state.get("aviso_criados"):
+            st.success(st.session_state.pop("aviso_criados"))
         n1, n2 = st.columns(2)
         with n1.expander("➕ Nova categoria"):
             nova_cat = st.text_input("Nome da nova categoria", key="nova_cat_nome")
-            preco_cat = st.number_input("Preço do primeiro produto (R$)", min_value=0.0, value=50.0,
+            c1, c2 = st.columns(2)
+            qtd_cat = c1.number_input("Quantos modelos criar", min_value=1, max_value=200, value=1, step=1,
+                                      key="nova_cat_qtd")
+            preco_cat = c2.number_input("Preço de cada modelo (R$)", min_value=0.0, value=50.0,
                                         step=1.0, key="nova_cat_preco")
-            if st.button("Criar categoria", type="primary", key="btn_nova_cat"):
+            vis_cat = st.checkbox("Já aparecer para o cliente", value=True, key="nova_cat_vis")
+            if st.button(f"Criar categoria com {int(qtd_cat)} modelo(s)", type="primary", key="btn_nova_cat"):
                 if nova_cat.strip():
-                    linha = {c: "" for c in COLUNAS_PRODUTOS}
-                    linha.update({"categoria": nova_cat.strip(), "modelo": f"{nova_cat.strip()} Modelo 1",
-                                  "preco": preco_cat, "ativo": True, "destaque": False, "estoque": 0,
-                                  "custo": 0.0, "peso_g": 0, "prazo_producao_dias": 5,
-                                  "preco_promocional": 0.0})
-                    gravar_csv(ARQ_PRODUTOS, pd.concat([df_produtos, pd.DataFrame([linha])], ignore_index=True))
+                    feitos = criar_modelos(nova_cat.strip(), nova_cat.strip(), int(qtd_cat),
+                                           preco_cat, vis_cat, numerar=True)
+                    st.session_state.aviso_criados = f"✅ Categoria {nova_cat.strip()} criada com {feitos} modelo(s)."
                     st.rerun()
                 else:
                     st.error("Digite o nome da categoria.")
@@ -2885,14 +2910,17 @@ if st.session_state.admin:
             cats_existentes = sorted(df_produtos["categoria"].unique().tolist())
             np_cat = st.selectbox("Categoria", cats_existentes, key="np_cat") if cats_existentes else ""
             np_nome = st.text_input("Nome do produto", key="np_nome")
-            np_preco = st.number_input("Preço (R$)", min_value=0.0, value=50.0, step=1.0, key="np_preco")
-            if st.button("Criar produto", type="primary", key="btn_novo_prod"):
+            c1, c2 = st.columns(2)
+            np_qtd = c1.number_input("Quantos modelos criar", min_value=1, max_value=200, value=1, step=1,
+                                     key="np_qtd", help="Com mais de 1, os nomes ficam: Nome Modelo 1, Nome Modelo 2...")
+            np_preco = c2.number_input("Preço de cada modelo (R$)", min_value=0.0, value=50.0, step=1.0, key="np_preco")
+            np_vis = st.checkbox("Já aparecer para o cliente", value=True, key="np_vis")
+            if int(np_qtd) > 1 and np_nome.strip():
+                st.caption(f"Vai criar: {np_nome.strip()} Modelo 1 até {np_nome.strip()} Modelo {int(np_qtd)}.")
+            if st.button(f"Criar {int(np_qtd)} modelo(s)", type="primary", key="btn_novo_prod"):
                 if np_nome.strip() and np_cat:
-                    linha = {c: "" for c in COLUNAS_PRODUTOS}
-                    linha.update({"categoria": np_cat, "modelo": np_nome.strip(), "preco": np_preco,
-                                  "ativo": True, "destaque": False, "estoque": 0, "custo": 0.0,
-                                  "peso_g": 0, "prazo_producao_dias": 5, "preco_promocional": 0.0})
-                    gravar_csv(ARQ_PRODUTOS, pd.concat([df_produtos, pd.DataFrame([linha])], ignore_index=True))
+                    feitos = criar_modelos(np_cat, np_nome.strip(), int(np_qtd), np_preco, np_vis)
+                    st.session_state.aviso_criados = f"✅ {feitos} modelo(s) de {np_nome.strip()} criados em {np_cat}."
                     st.rerun()
                 else:
                     st.error("Escolha a categoria e digite o nome.")
