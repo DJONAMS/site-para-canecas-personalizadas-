@@ -81,6 +81,7 @@ LOJA_PADRAO = {
     "msg_rastreio": "Oi {nome}! Seu pedido {pedido} está: {status}. Código de rastreio: {codigo}. Acompanhe em {link}",
     # Redes sociais e QR code da loja
     "instagram": "",
+    "twitter": "",
     "facebook": "",
     "mostrar_redes": True,
     "link_loja": "",
@@ -154,6 +155,11 @@ TRANSPORTADORAS = {
 }
 FUNDOS = ["Personalização (ícones)", "Listras suaves", "Pontinhos", "Liso"]
 FONTES_PERSO = ["Padrão", "Cursiva", "Bastão", "Manuscrita", "Elegante"]
+CORES_PECA = {"Branco": "#ffffff", "Preto": "#1f2937", "Cinza": "#9ca3af", "Rosa": "#f9a8d4", "Vermelho": "#dc2626",
+              "Azul": "#3b82f6", "Azul-marinho": "#1e3a8a", "Verde": "#16a34a", "Amarelo": "#facc15", "Lilás": "#c4b5fd"}
+LADOS_PECA = ["Frente", "Verso", "Frente e verso"]
+# Posição da arte dentro da área de impressão (tudo em fração da área: 0 a 1)
+GEO_PADRAO = {"cx": 0.5, "cy": 0.5, "w": 1.0, "h": 1.0, "rot": 0, "fit": "slice", "tx": 0.5, "ty": 0.85, "ts": 0.13}
 CSS_FONTES = {"Padrão": "Arial, sans-serif", "Cursiva": "'Brush Script MT', cursive",
               "Bastão": "Impact, 'Arial Black', sans-serif", "Manuscrita": "'Comic Sans MS', cursive",
               "Elegante": "Georgia, 'Times New Roman', serif"}
@@ -342,29 +348,42 @@ def codigo_pix(chave: str, nome: str, cidade: str, valor: float, txid: str = "**
              + _campo_pix("60", (cidade or "BRASIL")[:15])
              + _campo_pix("62", _campo_pix("05", txid)) + "6304")
     return corpo + _crc16(corpo)
-ICONES_REDES = {
-    "instagram": "https://cdn.simpleicons.org/instagram/E4405F",
-    "facebook": "https://cdn.simpleicons.org/facebook/1877F2",
-    "whatsapp": "https://cdn.simpleicons.org/whatsapp/25D366",
-}
+REDES_SOCIAIS = [  # (chave no painel, nome, cor da marca, ícone)
+    ("whatsapp", "WhatsApp", "#25D366", "whatsapp"),
+    ("instagram", "Instagram", "#E4405F", "instagram"),
+    ("facebook", "Facebook", "#1877F2", "facebook"),
+    ("twitter", "X (Twitter)", "#111111", "x"),
+]
 
 
-def barra_redes(loja: dict, tamanho: int = 34):
-    """Ícones clicáveis das redes sociais (configurados no painel)."""
-    if not loja.get("mostrar_redes", True):
+def barra_redes(loja: dict, tamanho: int = 34, sempre: bool = False):
+    """Ícones das redes sociais. Com sempre=True aparecem mesmo sem link (para testar a loja)."""
+    if not sempre and not loja.get("mostrar_redes", True):
         return
-    links = {
-        "instagram": loja.get("instagram", ""),
-        "facebook": loja.get("facebook", ""),
-        "whatsapp": f"https://wa.me/{loja['whatsapp']}" if loja.get("whatsapp") else "",
-    }
-    partes = "".join(
-        f"<a href='{html.escape(link, quote=True)}' target='_blank' title='{rede.title()}' "
-        f"style='margin:0 8px;'><img src='{ICONES_REDES[rede]}' width='{tamanho}' height='{tamanho}'></a>"
-        for rede, link in links.items() if link)
+    partes = ""
+    for chave, nome, cor_rede, icone in REDES_SOCIAIS:
+        if chave == "whatsapp":
+            link = f"https://wa.me/{loja['whatsapp']}" if loja.get("whatsapp") else ""
+        else:
+            link = str(loja.get(chave, "")).strip()
+        if not link and not sempre:
+            continue
+        img = (f"<img src='https://cdn.simpleicons.org/{icone}/ffffff' width='{int(tamanho * .55)}' "
+               f"height='{int(tamanho * .55)}' alt='{nome[0]}' "
+               "onerror=\"this.replaceWith(document.createTextNode(this.alt))\">")
+        bola = (f"<span style='display:inline-flex;align-items:center;justify-content:center;width:{tamanho}px;"
+                f"height:{tamanho}px;border-radius:50%;background:{cor_rede};color:#fff;font-weight:800;"
+                f"box-shadow:0 3px 8px rgba(0,0,0,.18);'>{img}</span>")
+        dica = nome if link else f"{nome} (link ainda não configurado no painel)"
+        if link:
+            partes += (f"<a href='{html.escape(link, quote=True)}' target='_blank' title='{dica}' "
+                       f"style='margin:0 5px;text-decoration:none;'>{bola}</a>")
+        else:
+            partes += f"<span title='{dica}' style='margin:0 5px;cursor:default;'>{bola}</span>"
     if partes:
-        st.markdown(f"<div style='text-align:center;margin:4px 0 10px;'>{partes}</div>",
-                    unsafe_allow_html=True)
+        st.markdown(f"<div style='text-align:center;margin:6px 0 10px;'>{partes}</div>", unsafe_allow_html=True)
+
+
 # ===============================================================
 # TEMA CLARO (cor e fundo vêm do painel)
 # ===============================================================
@@ -463,18 +482,25 @@ st.markdown(f"""
              font-weight: 700; background: #fee2e2; color: #991b1b; }}
     .selo-ok {{ background: #dcfce7; color: #166534; }}
     .selo-promo {{ background: #fef3c7; color: #92400e; }}
-    /* Foto clicável: um botão invisível cobre a foto inteira */
-    [class*="st-key-fc_"] {{ position: relative; gap: 0 !important; }}
-    [class*="st-key-fcb_"] {{ position: absolute !important; top: 0; left: 0; right: 0; bottom: 0;
+    /* Foto clicável: o botão fica invisível por cima da foto inteira */
+    [class*="st-key-fc_"] {{ position: relative !important; gap: 0 !important; }}
+    [class*="st-key-fc_"] [data-testid="stElementContainer"]:has(.stButton),
+    [class*="st-key-fc_"] .element-container:has(.stButton) {{
+        position: absolute !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
         z-index: 3; margin: 0 !important; width: 100% !important; height: 100% !important; }}
-    [class*="st-key-fcb_"] .stButton, [class*="st-key-fcb_"] .stButton > button {{
+    [class*="st-key-fc_"] .stButton, [class*="st-key-fc_"] .stButton > button,
+    [class*="st-key-fc_"] [data-testid="stTooltipHoverTarget"] {{
         width: 100% !important; height: 100% !important; min-height: 100% !important; }}
-    [class*="st-key-fcb_"] .stButton > button {{ opacity: 0 !important; cursor: zoom-in !important; }}
+    [class*="st-key-fc_"] .stButton > button {{ opacity: 0 !important; cursor: zoom-in !important; }}
     [class*="st-key-fc_"] img {{ transition: transform .35s ease; }}
     [class*="st-key-fc_"]:hover img {{ transform: scale(1.12) !important; }}
     [class*="st-key-fc_"]:hover .foto-dica {{ opacity: 1; }}
-    .foto-dica {{ position: absolute; left: 8px; bottom: 8px; background: rgba(17,24,39,.75); color: #fff !important;
-        font-size: .75rem; padding: 2px 8px; border-radius: 999px; opacity: 0; transition: opacity .2s; pointer-events: none; }}
+    .foto-dica {{ position: absolute; right: 8px; top: 8px; background: rgba(255,255,255,.9); width: 30px; height: 30px;
+        border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1rem;
+        box-shadow: 0 2px 6px rgba(0,0,0,.2); opacity: 0; transition: opacity .2s; pointer-events: none; }}
+    /* Campo escondido que recebe a posição da arte arrastada com o mouse */
+    [class*="st-key-pgeo_host_"] {{ position: absolute !important; width: 1px !important; height: 1px !important;
+        overflow: hidden !important; opacity: 0 !important; }}
     /* Botões escondidos que a mini fábrica aperta sozinha */
     .st-key-mc_ocultos, .st-key-mc_host {{ position: absolute !important; width: 1px !important; height: 0 !important;
         overflow: hidden !important; opacity: 0 !important; pointer-events: none !important; }}
@@ -539,7 +565,7 @@ def area_clicavel(chave: str, conteudo_html: str, on_click=None, args=None, dica
     chave = "".join(c if c.isalnum() or c in "_-" else "_" for c in chave)
     with st.container(key=f"fc_{chave}"):
         st.markdown(conteudo_html, unsafe_allow_html=True)
-        return st.button(dica, key=f"fcb_{chave}", on_click=on_click, args=args or (), help=dica)
+        return st.button(dica, key=f"fcb_{chave}", on_click=on_click, args=args or ())
 # ===============================================================
 # BANCO DE DADOS (arquivos CSV locais)
 # ===============================================================
@@ -819,6 +845,18 @@ def analise_estoque(margem_dias: int = 7) -> pd.DataFrame:
                       if pd.notna(d) else "")
     est["repor"], est["comprar"], est["data_limite"] = repor, comprar, limite
     return est
+def salvar_previa(id_pedido: str, n: int, item: dict, p: dict) -> str:
+    """Guarda a imagem de como a peça ficou, para conferir antes de imprimir."""
+    try:
+        caminho = os.path.join(PASTA_ARTES, f"{id_pedido}_{n}_previa.html")
+        with open(caminho, "w", encoding="utf-8") as f:
+            f.write(html_mockup(p.get("tipo") or tipo_peca(item.get("categoria", "") + " " + item["nome"]),
+                                p.get("arte", ""), p, item["nome"], altura=360))
+        return caminho
+    except Exception:
+        return ""
+
+
 def salvar_artes(id_pedido: str) -> str:
     """Grava as fotos/artes do carrinho na pasta artes e devolve a lista em texto (JSON)."""
     os.makedirs(PASTA_ARTES, exist_ok=True)
@@ -845,8 +883,9 @@ def salvar_artes(id_pedido: str) -> str:
                 f.write(dados)
         lista.append({"item": item["nome"], "quantidade": item["quantidade"], "arquivo": caminho,
                       "texto": p.get("texto", ""), "fonte": p.get("fonte", ""), "cor_texto": p.get("cor_texto", ""),
-                      "obs": p.get("obs", ""), "escala": p.get("escala", 100), "arte_nome": p.get("arte_nome", ""),
-                      "dx": p.get("dx", 0), "dy": p.get("dy", 0)})
+                      "obs": p.get("obs", ""), "arte_nome": p.get("arte_nome", ""), "geo": p.get("geo") or {},
+                      "cor_peca": p.get("cor_peca", "Branco"), "lado": p.get("lado", "Frente"),
+                      "tipo": p.get("tipo", ""), "previa": salvar_previa(id_pedido, n, item, p)})
     return json.dumps(lista, ensure_ascii=False) if lista else ""
 
 
@@ -960,9 +999,48 @@ def adicionar_ao_carrinho(item: dict, quantidade: int, variacao: str = "", perso
     })
 
 
+def geo_de(p: dict) -> dict:
+    """Posição da arte guardada no pedido (pedidos antigos usam escala/dx/dy)."""
+    g = dict(GEO_PADRAO)
+    if isinstance(p.get("geo"), dict):
+        g.update(p["geo"])
+        return g
+    e = float(p.get("escala", 100) or 100) / 100
+    g.update(w=e, h=e, cx=0.5 + float(p.get("dx", 0) or 0) / 200, cy=0.5 + float(p.get("dy", 0) or 0) / 200,
+             fit="meet")
+    return g
+
+
+def ler_geo(k: str) -> dict:
+    g = dict(GEO_PADRAO)
+    try:
+        g.update(json.loads(st.session_state.get(f"pgeo_{k}") or "{}"))
+    except Exception:
+        pass
+    g["ts"] = st.session_state.get(f"pts_{k}", 13) / 100
+    return g
+
+
+def mudar_geo(k: str, acao: str):
+    """Botões rápidos: preencher, caber, girar, recomeçar, texto no meio."""
+    g = ler_geo(k)
+    if acao == "preencher":
+        g.update(cx=0.5, cy=0.5, w=1.0, h=1.0, rot=0, fit="slice")
+    elif acao == "caber":
+        g.update(cx=0.5, cy=0.5, w=1.0, h=1.0, rot=0, fit="meet")
+    elif acao == "girar":
+        g["rot"] = (int(g.get("rot", 0)) + 90) % 360
+    elif acao == "recomecar":
+        g = dict(GEO_PADRAO)
+    elif acao == "texto_meio":
+        g.update(tx=0.5, ty=0.5)
+    st.session_state[f"pgeo_{k}"] = json.dumps(g)
+
+
 def marcar_origem(k: str, origem: str):
-    """Lembra se o cliente usou por último a foto dele ou uma arte pronta."""
+    """Lembra se o cliente usou por último a foto dele ou uma arte pronta, e já preenche a peça com ela."""
     st.session_state[f"porigem_{k}"] = origem
+    mudar_geo(k, "preencher")
 
 
 def arte_escolhida(k: str) -> tuple:
@@ -988,9 +1066,9 @@ def coletar_perso(item: dict) -> dict:
              "fonte": st.session_state.get(f"pfonte_{k}", "Padrão"),
              "cor_texto": st.session_state.get(f"pcor_{k}", "#000000"),
              "obs": st.session_state.get(f"pobs_{k}", "").strip(),
-             "escala": st.session_state.get(f"pesc_{k}", 100),
-             "dx": st.session_state.get(f"pdx_{k}", 0), "dy": st.session_state.get(f"pdy_{k}", 0),
-             "arte": ""}
+             "geo": ler_geo(k), "cor_peca": st.session_state.get(f"pcorpeca_{k}", "Branco"),
+             "lado": st.session_state.get(f"plado_{k}", "Frente"),
+             "tipo": tipo_peca(item.get("categoria", "") + " " + item["nome"]), "arte": ""}
     perso["arte"], nome_arte = arte_escolhida(k)
     if nome_arte:
         perso["arte_nome"] = nome_arte
@@ -1073,7 +1151,9 @@ def finalizar_pedido():
         if i.get("perso"):
             # " / " e não " | ": o "|" separa o frete e cortava os itens na etiqueta e na declaração
             extra += " [personalizado: " + " / ".join(x for x in [i["perso"].get("arte_nome", ""),
-                                                              i["perso"].get("texto", "")] if x) + "]"
+                                                              i["perso"].get("texto", ""),
+                                                              "peça " + i["perso"].get("cor_peca", "Branco"),
+                                                              i["perso"].get("lado", "")] if x) + "]"
         linhas.append(f"- {i['quantidade']}x {i['nome']}{extra} (R$ {i['subtotal']:.2f})")
 
     frete = st.session_state.get("frete")
@@ -1151,14 +1231,32 @@ def abrir_produto(item: dict):
     with esq:
         modo = st.radio("Ver como", ["🎨 Como fica a minha arte", "🔍 Foto ampliada", "🔄 Modelo 3D"],
                         horizontal=True, key=f"modo_ver_{item['id']}", label_visibility="collapsed")
+        k = item["id"]
+        if f"pgeo_{k}" not in st.session_state:
+            st.session_state[f"pgeo_{k}"] = json.dumps(GEO_PADRAO)
         if modo.startswith("🎨"):
-            components.html(mockup_perso(item), height=450)
-            st.caption("Escolha uma arte aqui embaixo ou envie a sua foto. A prévia muda na hora.")
+            components.html(mockup_perso(item), height=470)
+            st.caption("🖱️ Arraste a arte para mover · puxe as bolinhas dos cantos para esticar (Shift mantém a "
+                       "proporção) · bolinha de cima gira · rodinha do mouse aumenta e diminui · arraste o texto. "
+                       "No celular, use o dedo.")
+            b1, b2, b3, b4, b5 = st.columns(5)
+            b1.button("⬛ Preencher", key=f"gpre_{k}", on_click=mudar_geo, args=(k, "preencher"),
+                      use_container_width=True, help="A arte ocupa toda a peça")
+            b2.button("🔲 Caber", key=f"gcab_{k}", on_click=mudar_geo, args=(k, "caber"),
+                      use_container_width=True, help="A arte inteira aparece, sem cortar")
+            b3.button("↻ Girar", key=f"ggir_{k}", on_click=mudar_geo, args=(k, "girar"),
+                      use_container_width=True, help="Gira 90 graus")
+            b4.button("🔤 Texto no meio", key=f"gtxt_{k}", on_click=mudar_geo, args=(k, "texto_meio"),
+                      use_container_width=True)
+            b5.button("↺ Recomeçar", key=f"grec_{k}", on_click=mudar_geo, args=(k, "recomecar"),
+                      use_container_width=True)
         elif modo.startswith("🔍"):
             foto_com_lupa(item)
             st.caption("Passe o mouse sobre a foto para ver os detalhes.")
         else:
             renderizar_visualizador_3d(item, height=430)
+        with st.container(key=f"pgeo_host_{k}"):  # campo escondido que recebe a posição arrastada
+            st.text_input("posição da arte", key=f"pgeo_{k}", label_visibility="collapsed")
         grade_artes(item)
     with dir_:
         st.markdown(f"## {item['nome']}")
@@ -1187,14 +1285,14 @@ def abrir_produto(item: dict):
         k = item["id"]
         st.file_uploader("Ou envie a sua foto ou arte (até 3 MB)", type=["png", "jpg", "jpeg", "webp"],
                          key=f"arte_{k}", on_change=marcar_origem, args=(k, "upload"))
+        c1, c2 = st.columns(2)
+        c1.selectbox("Cor da peça", list(CORES_PECA), key=f"pcorpeca_{k}")
+        c2.radio("Onde vai a arte", LADOS_PECA, key=f"plado_{k}")
         st.text_input("Texto ou nome na peça (opcional)", key=f"ptxt_{k}")
         f1, f2 = st.columns(2)
         f1.selectbox("Estilo da letra", FONTES_PERSO, key=f"pfonte_{k}")
         f2.color_picker("Cor do texto", "#000000", key=f"pcor_{k}")
-        st.slider("Tamanho da arte na peça (%)", 30, 100, 100, step=5, key=f"pesc_{k}")
-        g1, g2 = st.columns(2)
-        g1.slider("Mover ⬅️ ➡️", -100, 100, 0, step=10, key=f"pdx_{k}")
-        g2.slider("Mover ⬆️ ⬇️", -100, 100, 0, step=10, key=f"pdy_{k}")
+        st.slider("Tamanho do texto", 5, 40, 13, key=f"pts_{k}")
         st.text_area("Como você quer? (posição, cores, detalhes)", key=f"pobs_{k}", height=70)
         arq = st.session_state.get(f"arte_{k}")
         if arq is not None and arq.size > 3 * 1024 * 1024:
@@ -1289,7 +1387,7 @@ def escolher_arte(chave: str, arte_id):
 def escolher_arte_galeria(k: str, arte_id: str):
     """O cliente clicou numa arte pronta: ela vai para a prévia na hora."""
     st.session_state[f"pgal_{k}"] = arte_id
-    marcar_origem(k, "galeria")
+    marcar_origem(k, "galeria")  # já preenche a peça inteira com a arte
     st.session_state[f"modo_ver_{k}"] = "🎨 Como fica a minha arte"
 
 
@@ -1391,27 +1489,34 @@ PECAS_MOCKUP = {
 }
 
 
-def html_mockup(tipo: str, src: str, texto: str, fonte: str, cor: str, escala: int, dx: int, dy: int,
-                nome: str = "", altura: int = 430) -> str:
-    """Desenha a peça com a arte do cliente por cima, na área de impressão."""
+COR_ORIGINAL_PECA = {"caneca": "#fff", "copo": "#eef2f7", "camiseta": "#fff", "bone": "#fff", "chaveiro": "#fff",
+                     "almofada": "#fff", "mateira": "#92400e", "quadro": "#fff"}
+
+
+def html_mockup(tipo: str, src: str, perso: dict, nome: str = "", altura: int = 450, editar: str = "") -> str:
+    """Desenha a peça com a arte por cima. Com editar=<código do produto>, dá para mexer com o mouse."""
     fundo, (ax, ay, aw, ah), recorte, sombra = PECAS_MOCKUP.get(tipo, PECAS_MOCKUP["quadro"])
-    e = max(30, min(100, int(escala or 100))) / 100
-    cx = ax + aw / 2 + (dx or 0) / 100 * aw / 2
-    cy = ay + ah / 2 + (dy or 0) / 100 * ah / 2
-    texto = str(texto or "")
-    fs = max(12.0, min(34.0, aw / max(4, len(texto)) * 1.7)) if texto else 0
-    iw, ih = aw * e, ah * e * (0.72 if texto else 1)
+    cor_peca = CORES_PECA.get(perso.get("cor_peca"), "#ffffff")
+    fundo = fundo.replace(f"fill='{COR_ORIGINAL_PECA.get(tipo, '#fff')}'", f"fill='{cor_peca}'")
+    if tipo == "caneca":
+        fundo = fundo.replace("stroke='#f9fafb'", f"stroke='{cor_peca}'")
+    g = geo_de(perso)
+    texto = str(perso.get("texto") or "")
+    mistura = "multiply" if cor_peca == "#ffffff" else "normal"
+    ajuste = {"slice": "xMidYMid slice", "meet": "xMidYMid meet", "none": "none"}.get(g["fit"], "xMidYMid slice")
+    cx, cy, w, h = ax + g["cx"] * aw, ay + g["cy"] * ah, g["w"] * aw, g["h"] * ah
+    giro = f"translate({cx:.1f},{cy:.1f}) rotate({float(g['rot']):.1f})"
     miolo = ""
     if src:
-        topo = cy - ih / 2 - (fs * 0.6 if texto else 0)
-        miolo += (f"<image href='{html.escape(src, quote=True)}' x='{cx - iw / 2:.1f}' y='{topo:.1f}' "
-                  f"width='{iw:.1f}' height='{ih:.1f}' preserveAspectRatio='xMidYMid meet' "
-                  "style='mix-blend-mode:multiply'/>")
+        miolo += (f"<g id='arte' transform='{giro}'><image id='img' href='{html.escape(src, quote=True)}' "
+                  f"x='{-w / 2:.1f}' y='{-h / 2:.1f}' width='{w:.1f}' height='{h:.1f}' preserveAspectRatio='{ajuste}' "
+                  f"style='mix-blend-mode:{mistura}'/></g>")
+    tx, ty, fs = ax + g["tx"] * aw, ay + g["ty"] * ah, max(6.0, float(g["ts"]) * ah)
+    estilo_txt = (f"text-anchor='middle' dominant-baseline='middle' font-size='{fs:.1f}' font-weight='700' "
+                  f"style=\"font-family:{CSS_FONTES.get(perso.get('fonte'), 'Arial')}\"")
     if texto:
-        ty = (cy + ih / 2 + fs * 0.5) if src else (cy + fs / 3)
-        miolo += (f"<text x='{cx:.1f}' y='{ty:.1f}' text-anchor='middle' font-size='{fs:.1f}' font-weight='700' "
-                  f"fill='{html.escape(cor or '#000', quote=True)}' "
-                  f"style=\"font-family:{CSS_FONTES.get(fonte, 'Arial')}\">{html.escape(texto)}</text>")
+        miolo += (f"<text id='txt' x='{tx:.1f}' y='{ty:.1f}' {estilo_txt} "
+                  f"fill='{html.escape(perso.get('cor_texto') or '#000', quote=True)}'>{html.escape(texto)}</text>")
     if not miolo:
         miolo = (f"<rect x='{ax + 4}' y='{ay + 4}' width='{aw - 8}' height='{ah - 8}' rx='8' fill='none' "
                  "stroke='#94a3b8' stroke-width='2' stroke-dasharray='8 6'/>"
@@ -1419,6 +1524,26 @@ def html_mockup(tipo: str, src: str, texto: str, fonte: str, cor: str, escala: i
                  "font-family='Arial'>Sua arte aqui</text>"
                  f"<text x='{ax + aw / 2}' y='{ay + ah / 2 + 20}' text-anchor='middle' font-size='11' fill='#94a3b8' "
                  "font-family='Arial'>escolha ou envie uma imagem</text>")
+    edicao, script = "", ""
+    if editar and (src or texto):
+        edicao = (f"<rect x='{ax}' y='{ay}' width='{aw}' height='{ah}' fill='none' stroke='#7c3aed' "
+                  "stroke-opacity='.35' stroke-dasharray='3 4' pointer-events='none'/>")
+        if src:
+            cantos = "".join(f"<circle class='canto' data-acao='canto' data-sx='{sx}' data-sy='{sy}' r='7' fill='#fff' "
+                             "stroke='#7c3aed' stroke-width='2.5' style='cursor:nwse-resize'/>"
+                             for sx, sy in [(-1, -1), (1, -1), (1, 1), (-1, 1)])
+            edicao += (f"<g id='sel' transform='{giro}'><rect id='caixa' data-acao='mover' fill='rgba(124,58,237,.04)' "
+                       "stroke='#7c3aed' stroke-width='1.6' stroke-dasharray='6 4' style='cursor:move'/>"
+                       "<line id='haste' x1='0' x2='0' stroke='#7c3aed' stroke-width='1.6'/>"
+                       "<circle id='gir' data-acao='girar' cx='0' r='7.5' fill='#7c3aed' stroke='#fff' stroke-width='2' "
+                       f"style='cursor:grab'/>{cantos}</g>")
+        if texto:
+            estilo_hit = estilo_txt.replace('style="font-family:', 'style="cursor:move;font-family:')
+            edicao += (f"<text id='txthit' data-acao='texto' x='{tx:.1f}' y='{ty:.1f}' {estilo_hit} fill='transparent' "
+                       "stroke='#7c3aed' stroke-width='.6' stroke-dasharray='2 2'>"
+                       f"{html.escape(texto)}</text>")
+        script = (EDITOR_JS.replace("__A__", json.dumps([ax, ay, aw, ah])).replace("__G__", json.dumps(g))
+                  .replace("__K__", json.dumps(editar)))
     defs = (_CIL + "<linearGradient id='tecido' x1='0' x2='0' y1='0' y2='1'><stop offset='0' stop-color='#000' "
             "stop-opacity='0'/><stop offset='1' stop-color='#000' stop-opacity='.10'/></linearGradient>"
             "<radialGradient id='fofo' cx='.5' cy='.45' r='.65'><stop offset='.55' stop-color='#000' stop-opacity='0'/>"
@@ -1426,24 +1551,81 @@ def html_mockup(tipo: str, src: str, texto: str, fonte: str, cor: str, escala: i
             "<radialGradient id='luz' cx='.5' cy='.35' r='.75'><stop offset='0' stop-color='#ffffff'/>"
             "<stop offset='1' stop-color='#dbe4f3'/></radialGradient>"
             f"<clipPath id='area'>{recorte}</clipPath>")
+    lado = html.escape(str(perso.get("lado") or "Frente"))
     return f"""<html><body style="margin:0;font-family:Arial,sans-serif;background:transparent">
-<div style="border-radius:12px;overflow:hidden;border:1px solid #dbe1ea;background:#fff">
-<svg viewBox="0 0 400 400" style="display:block;width:100%;height:{altura - 30}px">
+<div style="border-radius:12px;overflow:hidden;border:1px solid #dbe1ea;background:#fff;position:relative">
+<svg id="peca" viewBox="0 0 400 400" style="display:block;width:100%;height:{altura - 30}px;touch-action:none">
 <defs>{defs}</defs><rect width="400" height="400" fill="url(#luz)"/>
-{fundo}<g clip-path="url(#area)">{miolo}</g>{sombra}</svg>
+{fundo}<g clip-path="url(#area)">{miolo}</g>{sombra}{edicao}
+<rect x="8" y="8" width="{len(lado) * 7 + 16}" height="18" rx="9" fill="rgba(17,24,39,.75)"/>
+<text x="16" y="21" font-size="11" fill="#fff" font-family="Arial">{lado}</text></svg>
+<div id="salvo" style="position:absolute;right:10px;top:10px;background:#16a34a;color:#fff;font-size:12px;padding:3px 10px;
+border-radius:999px;opacity:0;transition:opacity .3s">✓ posição salva</div>
 <div style="padding:5px 10px;font-size:12px;color:#475569;border-top:1px solid #eef2f7">
-👀 Prévia de como fica{(' · ' + html.escape(nome)) if nome else ''} · as cores reais podem variar um pouco</div>
-</div></body></html>"""
+👀 Prévia de como fica{(' · ' + html.escape(nome)) if nome else ''} · peça {html.escape(str(perso.get('cor_peca') or 'Branco'))}
+· as cores reais podem variar um pouco</div>
+</div>{script}</body></html>"""
 
 
 def mockup_perso(item: dict) -> str:
-    """Prévia da peça com a arte escolhida ou a foto enviada pelo cliente."""
+    """Prévia (editável com o mouse) da peça com a arte escolhida ou a foto enviada pelo cliente."""
     k = item["id"]
     src, _ = arte_escolhida(k)
-    return html_mockup(tipo_peca(item["categoria"] + " " + item["nome"]), src,
-                       st.session_state.get(f"ptxt_{k}", ""), st.session_state.get(f"pfonte_{k}", "Padrão"),
-                       st.session_state.get(f"pcor_{k}", "#000000"), st.session_state.get(f"pesc_{k}", 100),
-                       st.session_state.get(f"pdx_{k}", 0), st.session_state.get(f"pdy_{k}", 0), item["nome"])
+    perso = {"texto": st.session_state.get(f"ptxt_{k}", ""), "fonte": st.session_state.get(f"pfonte_{k}", "Padrão"),
+             "cor_texto": st.session_state.get(f"pcor_{k}", "#000000"), "geo": ler_geo(k),
+             "cor_peca": st.session_state.get(f"pcorpeca_{k}", "Branco"),
+             "lado": st.session_state.get(f"plado_{k}", "Frente")}
+    return html_mockup(tipo_peca(item["categoria"] + " " + item["nome"]), src, perso, item["nome"], editar=k)
+
+
+EDITOR_JS = r"""<script>
+(function(){
+var svg=document.getElementById('peca'), A=__A__, G=__G__, K=__K__;
+var arte=document.getElementById('arte'), img=document.getElementById('img'), sel=document.getElementById('sel'),
+    caixa=document.getElementById('caixa'), txt=document.getElementById('txt'), hit=document.getElementById('txthit'),
+    gir=document.getElementById('gir'), haste=document.getElementById('haste');
+var cantos=[].slice.call(document.querySelectorAll('.canto'));
+function P(e){var p=svg.createSVGPoint();p.x=e.clientX;p.y=e.clientY;return p.matrixTransform(svg.getScreenCTM().inverse());}
+function lim(v,a,b){return Math.max(a,Math.min(b,v));}
+function centro(){return [A[0]+G.cx*A[2], A[1]+G.cy*A[3]];}
+function desenhar(){
+  var c=centro(), w=G.w*A[2], h=G.h*A[3], tr='translate('+c[0].toFixed(1)+','+c[1].toFixed(1)+') rotate('+G.rot+')';
+  if(arte){arte.setAttribute('transform',tr);img.setAttribute('x',-w/2);img.setAttribute('y',-h/2);img.setAttribute('width',w);img.setAttribute('height',h);}
+  if(sel){sel.setAttribute('transform',tr);caixa.setAttribute('x',-w/2);caixa.setAttribute('y',-h/2);caixa.setAttribute('width',w);caixa.setAttribute('height',h);
+    cantos.forEach(function(k){k.setAttribute('cx',(+k.getAttribute('data-sx'))*w/2);k.setAttribute('cy',(+k.getAttribute('data-sy'))*h/2);});
+    gir.setAttribute('cy',-h/2-24);haste.setAttribute('y1',-h/2);haste.setAttribute('y2',-h/2-24);}
+  if(txt){var tx=A[0]+G.tx*A[2], ty=A[1]+G.ty*A[3];[txt,hit].forEach(function(t){t.setAttribute('x',tx);t.setAttribute('y',ty);});}
+}
+var modo=null, ini=null, g0=null, timer=null;
+svg.addEventListener('pointerdown',function(e){var a=e.target.getAttribute('data-acao'); if(!a) return;
+  modo=a; ini=P(e); g0=JSON.parse(JSON.stringify(G)); try{svg.setPointerCapture(e.pointerId);}catch(_){} e.preventDefault();});
+svg.addEventListener('pointermove',function(e){ if(!modo) return; var p=P(e), c=centro();
+  if(modo==='mover'){G.cx=lim(g0.cx+(p.x-ini.x)/A[2],-.5,1.5);G.cy=lim(g0.cy+(p.y-ini.y)/A[3],-.5,1.5);}
+  else if(modo==='texto'){G.tx=lim(g0.tx+(p.x-ini.x)/A[2],0,1);G.ty=lim(g0.ty+(p.y-ini.y)/A[3],0,1);}
+  else if(modo==='canto'){var r=-G.rot*Math.PI/180, dx=p.x-c[0], dy=p.y-c[1], lx=dx*Math.cos(r)-dy*Math.sin(r), ly=dx*Math.sin(r)+dy*Math.cos(r);
+    var nw=lim(2*Math.abs(lx)/A[2],.08,4), nh=lim(2*Math.abs(ly)/A[3],.08,4);
+    if(e.shiftKey){var f=Math.max(nw/g0.w,nh/g0.h); nw=lim(g0.w*f,.08,4); nh=lim(g0.h*f,.08,4);}
+    G.w=nw; G.h=nh;}
+  else if(modo==='girar'){var ang=Math.atan2(p.y-c[1],p.x-c[0])*180/Math.PI+90, s=Math.round(ang/15)*15; if(Math.abs(ang-s)<5) ang=s; G.rot=Math.round(((ang%360)+360)%360);}
+  desenhar();});
+function soltar(){ if(!modo) return; modo=null; enviar(); }
+svg.addEventListener('pointerup',soltar); svg.addEventListener('pointercancel',soltar);
+svg.addEventListener('wheel',function(e){ if(!arte) return; e.preventDefault(); var f=e.deltaY<0?1.06:1/1.06;
+  G.w=lim(G.w*f,.08,4); G.h=lim(G.h*f,.08,4); desenhar(); clearTimeout(timer); timer=setTimeout(enviar,700);},{passive:false});
+function enviar(){
+  try{ var inp=window.parent.document.querySelector('.st-key-pgeo_host_'+K+' input'); if(!inp) return;
+    var v={}; for(var k in G){v[k]=typeof G[k]==='number'?Math.round(G[k]*1000)/1000:G[k];}
+    var set=Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype,'value').set;
+    inp.focus(); set.call(inp,JSON.stringify(v)); inp.dispatchEvent(new Event('input',{bubbles:true}));
+    inp.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));
+    inp.blur();
+    var av=document.getElementById('salvo'); if(av){av.style.opacity=1; setTimeout(function(){av.style.opacity=0;},1200);}
+  }catch(err){}
+}
+desenhar();
+})();
+</script>
+"""
 # ===============================================================
 # APRESENTAÇÃO PARA EMPRESAS E VITRINE DE VÍDEOS (usadas no painel e na loja)
 # ===============================================================
@@ -3530,31 +3712,35 @@ body {{ font-family: Arial, sans-serif; margin: 0; color: #000; }}
                         st.rerun()
     # ---------------------------------------------------------- ARTES PARA IMPRIMIR
     elif secao == "🖨️ Artes":
-        def html_arte(src, a, larg, alt_cm, encaixe, escala, espelhar, borda, copias, papel) -> str:
-            """Folha para imprimir a arte no tamanho exato, em centímetros."""
+        def html_arte(src, a, larg, alt_cm, encaixe, espelhar, borda, copias, papel) -> str:
+            """Folha para imprimir a arte no tamanho exato, em centímetros, do jeito que o cliente montou."""
             e = lambda v: html.escape(str(v or ""))
-            ajuste = "contain" if encaixe.startswith("Caber") else "cover"
-            mover = f"translate({float(a.get('dx', 0) or 0) / 2:.0f}%, {float(a.get('dy', 0) or 0) / 2:.0f}%)"
-            giro = f"transform: {'scaleX(-1) ' if espelhar else ''}{mover};"
+            g = geo_de(a)
+            if encaixe == "Como o cliente montou":
+                ajuste = {"slice": "cover", "meet": "contain", "none": "fill"}.get(g["fit"], "cover")
+            else:
+                ajuste = "contain" if encaixe.startswith("Caber") else "cover"
+                g.update(cx=0.5, cy=0.5, w=1.0, h=1.0, rot=0)
             linha = "1px dashed #555" if borda else "none"
             fonte = CSS_FONTES.get(a.get("fonte") or "Padrão", "Arial, sans-serif")
-            alt_img = escala * (0.75 if a.get("texto") else 1)
-            foto = (f"<img src='{src}' style='width:{escala}%;height:{alt_img}%;object-fit:{ajuste};'>" if src else "")
-            tam_txt = max(0.6, min(alt_cm * 0.2, 4.0))
-            texto = (f"<div class='txt' style='font-family:{fonte};color:{e(a.get('cor_texto') or '#000')};"
-                     f"font-size:{tam_txt:.2f}cm;'>{e(a.get('texto'))}</div>" if a.get("texto") else "")
+            foto = (f"<img src='{src}' style='position:absolute;left:{(g['cx'] - g['w'] / 2) * 100:.2f}%;"
+                    f"top:{(g['cy'] - g['h'] / 2) * 100:.2f}%;width:{g['w'] * 100:.2f}%;height:{g['h'] * 100:.2f}%;"
+                    f"object-fit:{ajuste};transform:rotate({float(g['rot']):.1f}deg);'>" if src else "")
+            texto = (f"<div class='txt' style='left:{g['tx'] * 100:.2f}%;top:{g['ty'] * 100:.2f}%;font-family:{fonte};"
+                     f"color:{e(a.get('cor_texto') or '#000')};font-size:{float(g['ts']) * alt_cm:.2f}cm;'>"
+                     f"{e(a.get('texto'))}</div>" if a.get("texto") else "")
             caixa = (f"<div class='area' style='width:{larg}cm;height:{alt_cm}cm;border:{linha};'>"
-                     f"<div class='miolo' style='{giro}'>{foto}{texto}</div></div>")
+                     f"<div class='miolo' style='{'transform:scaleX(-1);' if espelhar else ''}'>{foto}{texto}</div></div>")
             return f"""<html><head><meta charset='utf-8'><title>Arte</title><style>
 @page {{ size: {papel}; margin: 8mm; }}
 body {{ margin: 0; font-family: Arial; }}
 .grade {{ display: flex; flex-wrap: wrap; gap: 4mm; }}
-.area {{ box-sizing: border-box; overflow: hidden; page-break-inside: avoid; background: #fff; }}
-.miolo {{ width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; }}
-.txt {{ text-align: center; line-height: 1.1; padding: 1mm; word-break: break-word; }}
+.area {{ box-sizing: border-box; overflow: hidden; page-break-inside: avoid; background: #fff; position: relative; }}
+.miolo {{ position: absolute; inset: 0; overflow: hidden; }}
+.txt {{ position: absolute; transform: translate(-50%, -50%); text-align: center; line-height: 1.1; white-space: nowrap; font-weight: 700; }}
 .info {{ font-size: 10px; color: #444; margin-bottom: 3mm; }}
 </style></head><body onload='window.print()'>
-<div class='info'>{e(a.get('item'))} · área {larg} x {alt_cm} cm</div>
+<div class='info'>{e(a.get('item'))} · área {larg} x {alt_cm} cm · peça {e(a.get('cor_peca') or 'Branco')} · {e(a.get('lado') or 'Frente')}</div>
 <div class='grade'>{caixa * int(copias)}</div></body></html>"""
 
         pedidos = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
@@ -3595,28 +3781,34 @@ body {{ margin: 0; font-family: Arial; }}
                                         f"**Cor:** {a.get('cor_texto') or '#000000'}")
                         if a.get("obs"):
                             st.markdown(f"**Pedido do cliente:** {a['obs']}")
+                        st.markdown(f"**Peça:** {a.get('cor_peca') or 'Branco'} · **Lado:** {a.get('lado') or 'Frente'}")
+                        if a.get("previa") and os.path.exists(a["previa"]):
+                            st.markdown("**Como o cliente montou:**")
+                            with open(a["previa"], encoding="utf-8") as f:
+                                components.html(f.read(), height=340)
                     with col_b:
                         molde = st.selectbox("Molde", list(MOLDES_IMPRESSAO.keys()), key=f"molde_{id_sel}_{n}")
                         lw, lh = MOLDES_IMPRESSAO[molde]
                         m1, m2 = st.columns(2)
                         larg = m1.number_input("Largura (cm)", 1.0, 60.0, float(lw), 0.5, key=f"larg_{id_sel}_{n}_{molde}")
                         alt_cm = m2.number_input("Altura (cm)", 1.0, 60.0, float(lh), 0.5, key=f"alt_{id_sel}_{n}_{molde}")
-                        encaixe = st.radio("Encaixe da foto", ["Caber inteira", "Preencher tudo (corta as bordas)"],
-                                           key=f"enc_{id_sel}_{n}")
-                        escala = st.slider("Tamanho da arte dentro da área (%)", 30, 100,
-                                           int(a.get("escala", 100) or 100), 5, key=f"esc_{id_sel}_{n}")
+                        encaixe = st.radio("Encaixe da foto", ["Como o cliente montou", "Caber inteira",
+                                                               "Preencher tudo (corta as bordas)"], key=f"enc_{id_sel}_{n}")
                         p1, p2 = st.columns(2)
                         espelhar = p1.checkbox("Espelhar (sublimação)", key=f"esp_{id_sel}_{n}")
                         borda = p2.checkbox("Linha de corte", value=True, key=f"bor_{id_sel}_{n}")
                         p3, p4 = st.columns(2)
-                        copias = p3.number_input("Cópias", 1, 50, int(a.get("quantidade", 1) or 1), key=f"cop_{id_sel}_{n}")
+                        dois_lados = 2 if a.get("lado") == "Frente e verso" else 1
+                        copias = p3.number_input("Cópias", 1, 100, min(100, int(a.get("quantidade", 1) or 1) * dois_lados),
+                                                 key=f"cop_{id_sel}_{n}",
+                                                 help="Frente e verso já vem com o dobro de cópias")
                         papel = p4.selectbox("Papel", ["A4", "A3", "Carta"], key=f"pap_{id_sel}_{n}")
                     src = ""
                     if tem_foto:
                         ext = os.path.splitext(a["arquivo"])[1].lower().strip(".")
                         mime = "image/png" if ext == "png" else "image/webp" if ext == "webp" else "image/jpeg"
                         src = f"data:{mime};base64," + base64.b64encode(bruto).decode()
-                    folha = html_arte(src, a, larg, alt_cm, encaixe, escala, espelhar, borda, copias, papel)
+                    folha = html_arte(src, a, larg, alt_cm, encaixe, espelhar, borda, copias, papel)
                     with col_c:
                         st.markdown("**Prévia**")
                         components.html(folha.replace("onload='window.print()'", ""), height=380, scrolling=True)
@@ -4091,6 +4283,8 @@ Na aba *Notas dos pedidos* existe um botão que gera a declaração pronta para 
                 c1, c2 = st.columns([2, 1])
                 l_insta = c1.text_input("Link do Instagram", value=LOJA["instagram"],
                                         placeholder="https://instagram.com/sualoja")
+                l_tw = c1.text_input("Link do X (Twitter)", value=LOJA.get("twitter", ""),
+                                     placeholder="https://x.com/sualoja")
                 l_face = c1.text_input("Link do Facebook", value=LOJA["facebook"],
                                        placeholder="https://facebook.com/sualoja")
                 l_redes = c1.checkbox("Mostrar ícones das redes na loja", value=bool(LOJA["mostrar_redes"]))
@@ -4138,6 +4332,7 @@ Na aba *Notas dos pedidos* existe um botão que gera a declaração pronta para 
                     "whatsapp": "".join(ch for ch in l_wpp if ch.isdigit()), "cor_principal": l_cor, "fundo": l_fundo,
                     "mostrar_mini": l_mini,
                     "instagram": l_insta.strip(), "facebook": l_face.strip(), "mostrar_redes": l_redes,
+                    "twitter": l_tw.strip(),
                     "link_loja": l_link.strip(), "pix_chave": l_pix.strip(), "pix_nome": l_pixn.strip(),
                     "pix_cidade": l_pixc.strip(), "pix_instrucoes": l_pixi, "cartao_ligado": l_cartao,
                     "link_pagamento_cartao": l_linkc.strip(), "brinde_ligado": l_brl, "brinde_a_cada": int(l_bac),
@@ -4382,6 +4577,9 @@ def mudar_qtd(indice: int, delta: int):
 
 
 with st.container(key="carrinho_fixo"):
+    st.markdown("<div style='text-align:center;font-weight:700;font-size:.85rem;color:#4a5568;'>"
+                "Fale com a gente</div>", unsafe_allow_html=True)
+    barra_redes(LOJA, tamanho=50, sempre=True)
     st.markdown("### 🛒 Seu Carrinho")
     if not st.session_state.carrinho:
         st.info("O carrinho está vazio. Escolha uma categoria para começar.")
@@ -4472,7 +4670,7 @@ with st.container(key="carrinho_fixo"):
     st.divider()
     if st.button("📦 Acompanhar meu pedido", use_container_width=True, key="btn_acomp"):
         abrir_acompanhamento()
-    barra_redes(LOJA, tamanho=28)
+    barra_redes(LOJA, tamanho=34, sempre=True)
 # ===============================================================
 # CADASTRO DA EMPRESA (modo empresa)
 # ===============================================================
@@ -4572,7 +4770,7 @@ elif pagina == "categoria" and st.session_state.categoria_aberta in CATALOGO:
                 # A foto inteira é clicável e abre os detalhes, igual ao botão
                 clicou_foto = area_clicavel(f"prod_{item['id']}",
                                             html_imagem(item["imagem"], cat_nome, item["nome"], classe="cat-img",
-                                                        zoom=False, dica="🔍 Ver detalhes"),
+                                                        zoom=False, dica="🔍"),
                                             dica="Ver detalhes")
                 selo = "<span class='selo selo-promo'>PROMOÇÃO</span> " if item["em_promo"] else ""
                 st.markdown(f"{selo}**{item['nome']}**  \nR$ {item['preco']:.2f}", unsafe_allow_html=True)
@@ -4596,7 +4794,7 @@ else:
             with cols[idx], st.container(border=True):
                 clicou_foto = area_clicavel(f"cat{inicio + idx}",
                                             html_imagem(destaque["imagem"], cat_nome, cat_nome, classe="cat-img",
-                                                        zoom=False, dica="Ver modelos"),
+                                                        zoom=False, dica="🔍"),
                                             dica="Ver modelos")
                 st.markdown(f"**{cat_nome}**  \nA partir de R$ {destaque['preco']:.2f}")
                 if st.button(f"Ver {len(CATALOGO[cat_nome]['itens'])} modelos", key=f"btn_cat_{cat_nome}",
