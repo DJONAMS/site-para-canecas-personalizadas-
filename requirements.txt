@@ -1,2 +1,6 @@
 streamlit>=1.40
 qrcode[pil]
+pandas
+altair
+sqlalchemy
+psycopg2-binary
