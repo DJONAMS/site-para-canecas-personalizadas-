@@ -1,23 +1,32 @@
 import base64
+import hmac
 import html
 import io
 import json
 import os
 import random
+import threading
+import time
 import urllib.parse
 import urllib.request
 import uuid
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
+# Horário de Brasília em tudo (datas dos pedidos, expediente do chat...). O servidor fica em outro país.
+os.environ["TZ"] = "America/Sao_Paulo"
+if hasattr(time, "tzset"):
+    time.tzset()
+
 # ===============================================================
 # CONFIGURAÇÕES FIXAS - o resto você muda pelo painel
 # ===============================================================
-SENHA_ADMIN = "admin123"  # TROQUE por uma senha forte antes de publicar
+# A senha do painel NÃO fica mais aqui: ela fica nos Secrets do Streamlit (SENHA_ADMIN).
 
 ARQ_PRODUTOS = "dados_produtos.csv"
 ARQ_CLIENTES = "dados_clientes.csv"
@@ -43,10 +52,10 @@ COL_MOV = ["data", "material", "tipo", "quantidade", "referencia"]
 STATUS_COMPRA = ["Orçamento", "Pedida", "Paga", "A caminho", "Recebida", "Cancelada"]
 ARQ_PRECOS = "dados_precos_fornecedores.csv"
 COL_PRECO = ["data", "fornecedor", "material", "preco", "origem"]
-ARQ_EQUIPE = "dados_equipe.json"
 ARQ_HIST = "dados_historico_pedidos.csv"
-ARQ_VIDA = "dados_cidade_vida.json"  # dinheiro de mentirinha da equipe na mini cidade
 COL_HIST = ["data", "id_pedido", "status"]
+ARQ_CHAT = "dados_chat.csv"  # conversas do chat da loja
+COL_CHAT = ["data", "conversa", "quem", "nome", "texto"]
 # Status em que o material já saiu do estoque (o diretor autorizou)
 STATUS_COM_MATERIAL = ["Pago", "Em produção", "Enviado", "Entregue"]
 
@@ -105,6 +114,57 @@ LOJA_PADRAO = {
         {"a_partir_de": 50, "desconto_pct": 10},
         {"a_partir_de": 100, "desconto_pct": 15},
     ],
+    # Chat da loja e horário de atendimento (tudo editável no painel, em 💬 Chat ao vivo)
+    "chat_ligado": True,
+    "exp_inicio": "08:00",
+    "exp_fim": "18:00",
+    "exp_dias": [0, 1, 2, 3, 4],  # 0 = segunda ... 6 = domingo
+    "chat_nome_atendente": "",
+    "chat_boas_vindas": "Olá! 👋 Sou o assistente virtual da {loja}. Toque numa das perguntas abaixo ou escreva "
+                        "a sua dúvida. Se precisar, eu chamo uma pessoa para falar com você.",
+    "chat_resolveu": "Isso respondeu a sua dúvida? Se não, toque em 🙋 Falar com uma pessoa.",
+    "chat_nao_entendi": "Hmm, não encontrei a resposta para isso. 🤔 Tente uma das perguntas abaixo ou toque em "
+                        "🙋 Falar com uma pessoa.",
+    "chat_chamando": "Já avisei a equipe! 🙌 Fique à vontade para escrever aqui, a resposta aparece nesta conversa.",
+    "chat_offline": "No momento não tem ninguém online, mas a sua mensagem ficou guardada e respondemos assim "
+                    "que possível. Se preferir, chame no WhatsApp pelo botão abaixo.",
+    "chat_fora_expediente": "Agora estamos fora do horário de atendimento ({horario}). 🌙 Deixe a sua mensagem aqui "
+                            "que respondemos assim que voltarmos. Enquanto isso, as perguntas rápidas podem ajudar!",
+    "chat_perguntas": [
+        {"pergunta": "⏰ Prazo de produção", "palavras": "prazo, demora, pronto, quantos dias, quando fica",
+         "resposta": "Cada produto mostra o prazo de produção na página dele (normalmente 5 dias úteis). Depois de "
+                     "pronto, o envio leva o prazo do frete do seu estado, que aparece quando você calcula o frete."},
+        {"pergunta": "🚚 Frete e entrega", "palavras": "frete, entrega, envio, enviar, correios, cep, chega",
+         "resposta": "Digite o seu CEP no carrinho e toque em Calcular frete: o valor e o prazo aparecem na hora. "
+                     "{frete_gratis} Entregamos para todo o Brasil."},
+        {"pergunta": "💳 Formas de pagamento", "palavras": "pagamento, pagar, pix, cartao, parcela, boleto",
+         "resposta": "Aceitamos Pix (o QR code aparece no carrinho) e cartão pelo link de pagamento seguro. Depois de "
+                     "pagar, mande o comprovante no WhatsApp junto com o número do pedido."},
+        {"pergunta": "🎨 Como personalizar", "palavras": "personalizar, arte, foto, imagem, nome, logo, estampa",
+         "resposta": "Abra o produto e toque em Ver detalhes. Lá você envia a sua foto (até 3 MB) ou escolhe uma arte "
+                     "pronta, escreve um nome e arrasta para posicionar. A prévia mostra como fica antes de comprar."},
+        {"pergunta": "📦 Acompanhar meu pedido", "palavras": "acompanhar, rastreio, rastrear, codigo, onde esta, status",
+         "resposta": "No fim do carrinho tem o botão 📦 Acompanhar meu pedido. Digite o número do pedido "
+                     "(ex.: PED-00012) e o WhatsApp usado na compra."},
+        {"pergunta": "🏢 Pedido para empresa", "palavras": "empresa, cnpj, lote, atacado, quantidade, brinde, revenda",
+         "resposta": "Toque em 🏢 Sou empresa, no topo da loja, e informe o CNPJ. Empresas têm desconto por "
+                     "quantidade, brindes e prazo de produção em lote."},
+        {"pergunta": "🔄 Defeito ou erro no pedido", "palavras": "troca, trocar, defeito, quebrou, quebrado, chegou quebrado, veio errado, errado, "
+                                                       "riscado, devolver",
+         "resposta": "Se o produto chegou com defeito ou diferente do que você pediu, mande fotos no WhatsApp em até "
+                     "7 dias depois de receber, com o número do pedido, que a gente resolve."},
+        {"pergunta": "🕐 Horário de atendimento", "palavras": "horario, atendimento, aberto, funciona, sabado, domingo",
+         "resposta": "Nosso atendimento é {horario}. Fora desse horário, deixe a sua mensagem que respondemos assim "
+                     "que voltarmos."},
+    ],
+    # Textos prontos para colocar no WhatsApp Business (o painel mostra já preenchidos, para copiar)
+    "wpp_saudacao": "Olá! 👋 Obrigado por chamar a {loja}. Para agilizar, responda com o número da opção:\n"
+                    "1️⃣ Fazer um pedido\n2️⃣ Acompanhar meu pedido (mande o número PED-...)\n"
+                    "3️⃣ Pedido para empresa\n4️⃣ Outra dúvida\n\n🛒 Nossa loja: {link}",
+    "wpp_ausencia": "Olá! 😊 Agora estamos fora do horário de atendimento ({horario}). Sua mensagem ficou "
+                    "guardada e respondemos assim que voltarmos.\n\nEnquanto isso:\n🛒 Faça seu pedido pela loja: "
+                    "{link}\n📦 Acompanhe seu pedido em \"Acompanhar meu pedido\", na loja\n💬 Tire dúvidas rápidas "
+                    "no chat da loja",
 }
 # ---------------------------------------------------------------
 # Colunas de cada tabela
@@ -177,35 +237,6 @@ MOLDES_IMPRESSAO = {
     "Tamanho livre": (10.0, 10.0),
 }
 # ---------------------------------------------------------------
-# Equipe da mini fábrica (você troca pelos nomes reais no painel, em Empresa ao vivo)
-# ---------------------------------------------------------------
-SETORES = ["Diretoria", "Atendimento", "Produção", "Estoque", "Expedição", "Entrega"]
-TONS_PELE = {"Muito clara": "#FBE0CF", "Clara": "#F1C7A8", "Média": "#E0AC88",
-             "Morena": "#C68642", "Negra": "#8D5524"}
-CORES_CABELO = {"Preto": "#1a1a1a", "Castanho": "#5a3214", "Loiro": "#d4a64a",
-                "Ruivo": "#a3401a", "Grisalho": "#9ca3af"}
-ESTILOS_CABELO = ["Curto", "Longo", "Coque", "Rabo de cavalo", "Careca", "Boné"]
-EQUIPE_PADRAO = [
-    {"nome": "Diretor(a)", "cargo": "Diretor(a)", "setor": "Diretoria", "pele": "Média",
-     "cabelo": "Grisalho", "estilo": "Curto", "camisa": "#1e293b", "ativo": True},
-    {"nome": "Ana", "cargo": "Atendente", "setor": "Atendimento", "pele": "Clara",
-     "cabelo": "Castanho", "estilo": "Longo", "camisa": "#db2777", "ativo": True},
-    {"nome": "Bruno", "cargo": "Atendente", "setor": "Atendimento", "pele": "Negra",
-     "cabelo": "Preto", "estilo": "Curto", "camisa": "#9333ea", "ativo": True},
-    {"nome": "Carla", "cargo": "Impressão e sublimação", "setor": "Produção", "pele": "Morena",
-     "cabelo": "Preto", "estilo": "Coque", "camisa": "#059669", "ativo": True},
-    {"nome": "Diego", "cargo": "Prensa térmica", "setor": "Produção", "pele": "Clara",
-     "cabelo": "Loiro", "estilo": "Boné", "camisa": "#0d9488", "ativo": True},
-    {"nome": "Elisa", "cargo": "Canecas e copos", "setor": "Produção", "pele": "Média",
-     "cabelo": "Ruivo", "estilo": "Rabo de cavalo", "camisa": "#10b981", "ativo": True},
-    {"nome": "Fábio", "cargo": "Estoquista", "setor": "Estoque", "pele": "Negra",
-     "cabelo": "Preto", "estilo": "Careca", "camisa": "#ea580c", "ativo": True},
-    {"nome": "Gabi", "cargo": "Embalagem", "setor": "Expedição", "pele": "Muito clara",
-     "cabelo": "Castanho", "estilo": "Rabo de cavalo", "camisa": "#2563eb", "ativo": True},
-    {"nome": "Hugo", "cargo": "Motorista", "setor": "Entrega", "pele": "Morena",
-     "cabelo": "Preto", "estilo": "Boné", "camisa": "#65a30d", "ativo": True},
-]
-# ---------------------------------------------------------------
 # Dados iniciais de exemplo (você edita tudo depois no painel)
 # ---------------------------------------------------------------
 PALAVRAS_CHAVE = {
@@ -271,21 +302,256 @@ FICHA_PADRAO = {
 
 
 # ===============================================================
-# ARQUIVOS JSON (loja, apresentações, vitrine)
+# BANCO DE DADOS (Supabase)
+# Tudo o que antes ficava em arquivos (pedidos, clientes, fotos, artes...) agora fica no banco,
+# e não some quando o Streamlit reinicia. Os nomes continuam os mesmos (ex.: dados_pedidos.csv),
+# mas viram registros dentro do banco. Sem banco configurado, o app usa arquivos locais (só para teste).
 # ===============================================================
-def ler_json(arquivo: str, padrao):
-    if os.path.exists(arquivo):
+def _segredo(*chaves):
+    """Lê um valor dos Secrets do Streamlit (a senha e o endereço do banco ficam lá, fora do código)."""
+    try:
+        valor = st.secrets
+        for k in chaves:
+            valor = valor[k]
+        return valor
+    except Exception:
+        return None
+
+
+URL_BANCO = str(_segredo("connections", "banco", "url") or "").strip()
+SENHA_ADMIN = str(_segredo("SENHA_ADMIN") or "")  # fica nos Secrets: ninguém vê no código nem no GitHub
+# Listas que só crescem (cliques, histórico...): cada linha nova é gravada sozinha, sem reescrever tudo
+ANEXOS = {ARQ_CLIQUES, ARQ_MOVIMENTOS, ARQ_HIST, ARQ_PRECOS, ARQ_CHAT}
+
+_local = threading.local()            # marca se esta conexão do cliente está dentro da trava
+_CACHE, _GERACAO = {}, {}             # memória rápida: evita ir ao banco a cada clique
+_CACHE_LOCK = threading.Lock()
+_TRAVA_ARQUIVOS = threading.RLock()   # trava usada só quando não há banco (teste no computador)
+
+
+def _sql(q: str):
+    from sqlalchemy import text
+    return text(q)
+
+
+@st.cache_resource(show_spinner=False)
+def _banco():
+    from sqlalchemy import create_engine
+    url = URL_BANCO
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    eng = create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=10, pool_recycle=300, pool_timeout=60)
+    with eng.begin() as c:
+        c.execute(_sql("CREATE TABLE IF NOT EXISTS arquivos (nome TEXT PRIMARY KEY, conteudo TEXT NOT NULL)"))
+        c.execute(_sql("CREATE TABLE IF NOT EXISTS binarios (nome TEXT PRIMARY KEY, dados BYTEA NOT NULL)"))
+        c.execute(_sql("CREATE TABLE IF NOT EXISTS linhas (id BIGSERIAL PRIMARY KEY, nome TEXT NOT NULL, "
+                       "dados TEXT NOT NULL)"))
+        c.execute(_sql("CREATE INDEX IF NOT EXISTS linhas_nome ON linhas (nome, id)"))
+    return eng
+
+
+def _na_trava() -> bool:
+    return getattr(_local, "nivel", 0) > 0
+
+
+@contextmanager
+def _conexao(gravar: bool = False):
+    """Conexão com o banco. Dentro da trava, usa a mesma conexão que segura a trava
+    (assim a fila nunca fica esperando por uma conexão livre)."""
+    c = getattr(_local, "con", None)
+    if c is not None:
         try:
-            with open(arquivo, "r", encoding="utf-8") as f:
-                return json.load(f)
+            yield c
+            if gravar:
+                c.commit()
+        except Exception:
+            c.rollback()
+            raise
+        return
+    if gravar:
+        with _banco().begin() as c:
+            yield c
+    else:
+        with _banco().connect() as c:
+            yield c
+
+
+def _cacheado(chave, carregar):
+    """Guarda na memória o que veio do banco. Dentro da trava, sempre lê o banco na hora."""
+    if not _na_trava():
+        with _CACHE_LOCK:
+            if chave in _CACHE:
+                return _CACHE[chave]
+            geracao = _GERACAO.get(chave, 0)
+    else:
+        with _CACHE_LOCK:
+            geracao = _GERACAO.get(chave, 0)
+    valor = carregar()
+    with _CACHE_LOCK:
+        if _GERACAO.get(chave, 0) == geracao:  # ninguém gravou enquanto eu lia
+            _CACHE[chave] = valor
+    return valor
+
+
+def _esquecer(chave):
+    with _CACHE_LOCK:
+        _GERACAO[chave] = _GERACAO.get(chave, 0) + 1
+        _CACHE.pop(chave, None)
+
+
+def _ler_texto(nome: str):
+    def carregar():
+        if URL_BANCO:
+            with _conexao() as c:
+                r = c.execute(_sql("SELECT conteudo FROM arquivos WHERE nome = :n"), {"n": nome}).fetchone()
+            return r[0] if r else None
+        if os.path.exists(nome):
+            with open(nome, "r", encoding="utf-8") as f:
+                return f.read()
+        return None
+    return _cacheado(("T", nome), carregar)
+
+
+def _gravar_texto(nome: str, conteudo: str):
+    if URL_BANCO:
+        with _conexao(gravar=True) as c:
+            c.execute(_sql("INSERT INTO arquivos (nome, conteudo) VALUES (:n, :c) "
+                           "ON CONFLICT (nome) DO UPDATE SET conteudo = EXCLUDED.conteudo"),
+                      {"n": nome, "c": conteudo})
+    else:
+        os.makedirs(os.path.dirname(nome) or ".", exist_ok=True)
+        with open(nome, "w", encoding="utf-8") as f:
+            f.write(conteudo)
+    _esquecer(("T", nome))
+
+
+def _ler_linhas(nome: str) -> list:
+    """Linhas gravadas uma a uma (cliques, histórico, movimentos, preços)."""
+    def carregar():
+        if not URL_BANCO:
+            return []
+        with _conexao() as c:
+            res = c.execute(_sql("SELECT dados FROM linhas WHERE nome = :n ORDER BY id"), {"n": nome})
+            return [json.loads(r[0]) for r in res]
+    return _cacheado(("L", nome), carregar)
+
+
+def anexar_linha(arquivo: str, colunas: list, linha: dict):
+    """Acrescenta UMA linha no fim da lista, sem reescrever o resto (rápido e sem perder nada)."""
+    dados = {c: str(linha.get(c, "")) for c in colunas}
+    if URL_BANCO:
+        with _conexao(gravar=True) as c:
+            c.execute(_sql("INSERT INTO linhas (nome, dados) VALUES (:n, :d)"),
+                      {"n": arquivo, "d": json.dumps(dados, ensure_ascii=False)})
+        _esquecer(("L", arquivo))
+    else:
+        with trava():
+            df = ler_csv(arquivo, colunas)
+            gravar_csv(arquivo, pd.concat([df, pd.DataFrame([dados])], ignore_index=True))
+
+
+def gravar_bin(nome: str, dados: bytes):
+    """Guarda foto ou arte do cliente no banco (não some quando o app reinicia)."""
+    if URL_BANCO:
+        with _banco().begin() as c:
+            c.execute(_sql("INSERT INTO binarios (nome, dados) VALUES (:n, :d) "
+                           "ON CONFLICT (nome) DO UPDATE SET dados = EXCLUDED.dados"), {"n": nome, "d": dados})
+    else:
+        os.makedirs(os.path.dirname(nome) or ".", exist_ok=True)
+        with open(nome, "wb") as f:
+            f.write(dados)
+
+
+def ler_bin(nome: str):
+    if not nome:
+        return None
+    if URL_BANCO:
+        with _banco().connect() as c:
+            r = c.execute(_sql("SELECT dados FROM binarios WHERE nome = :n"), {"n": nome}).fetchone()
+        if r:
+            return bytes(r[0])
+    if os.path.exists(nome):  # artes antigas que ainda estão no computador
+        with open(nome, "rb") as f:
+            return f.read()
+    return None
+
+
+@contextmanager
+def trava():
+    """Fila única para gravar. Todos os clientes compram ao mesmo tempo; só o instante de GRAVAR
+    (menos de 1 segundo) é feito um de cada vez. Assim nenhum pedido apaga o outro
+    e nenhum número de pedido se repete."""
+    nivel = getattr(_local, "nivel", 0)
+    if nivel:  # já estou dentro da trava: só sigo em frente
+        _local.nivel = nivel + 1
+        try:
+            yield
+        finally:
+            _local.nivel = nivel
+        return
+    if not URL_BANCO:
+        with _TRAVA_ARQUIVOS:
+            _local.nivel = 1
+            try:
+                yield
+            finally:
+                _local.nivel = 0
+        return
+    with _banco().connect() as c:
+        c.execute(_sql("SELECT pg_advisory_lock(4242)"))
+        c.commit()
+        _local.nivel, _local.con = 1, c
+        try:
+            yield
+        finally:
+            _local.nivel, _local.con = 0, None
+            try:
+                c.rollback()
+                c.execute(_sql("SELECT pg_advisory_unlock(4242)"))
+                c.commit()
+            except Exception:
+                c.invalidate()  # fecha a conexão, o que também solta a trava
+
+
+def ler_json(arquivo: str, padrao):
+    txt = _ler_texto(arquivo)
+    if txt:
+        try:
+            return json.loads(txt)
         except Exception:
             pass
     return json.loads(json.dumps(padrao))  # cópia
 
 
 def gravar_json(arquivo: str, dados):
-    with open(arquivo, "w", encoding="utf-8") as f:
-        json.dump(dados, f, ensure_ascii=False, indent=2)
+    _gravar_texto(arquivo, json.dumps(dados, ensure_ascii=False, indent=2))
+
+
+def ler_csv(arquivo: str, colunas: list) -> pd.DataFrame:
+    partes = []
+    txt = _ler_texto(arquivo)
+    if txt:
+        try:
+            partes.append(pd.read_csv(io.StringIO(txt), dtype=str).fillna(""))
+        except Exception:
+            pass
+    if arquivo in ANEXOS:
+        linhas = _ler_linhas(arquivo)
+        if linhas:
+            partes.append(pd.DataFrame(linhas, dtype=str).fillna(""))
+    df = pd.concat(partes, ignore_index=True) if partes else pd.DataFrame(columns=colunas)
+    for c in colunas:
+        if c not in df.columns:
+            df[c] = ""
+    return df[colunas].fillna("").copy()
+
+
+def gravar_csv(arquivo: str, df: pd.DataFrame):
+    _gravar_texto(arquivo, df.to_csv(index=False))
+    if arquivo in ANEXOS and URL_BANCO:  # a lista inteira foi regravada: limpa as linhas soltas
+        with _conexao(gravar=True) as c:
+            c.execute(_sql("DELETE FROM linhas WHERE nome = :n"), {"n": arquivo})
+        _esquecer(("L", arquivo))
 
 
 def carregar_loja() -> dict:
@@ -298,9 +564,20 @@ def gravar_loja(loja: dict):
     gravar_json(ARQ_LOJA, loja)
 
 
-LOJA = carregar_loja()
+try:
+    LOJA = carregar_loja()
+    ERRO_BANCO = False
+except Exception as _erro:
+    print("Erro ao conectar no banco:", type(_erro).__name__)
+    LOJA = json.loads(json.dumps(LOJA_PADRAO))
+    ERRO_BANCO = True
 st.set_page_config(page_title=LOJA["nome_empresa"], page_icon="🏷️", layout="wide",
                    initial_sidebar_state="expanded")
+if ERRO_BANCO:
+    st.error("😕 A loja está em manutenção por alguns instantes. Tente de novo daqui a pouco.")
+    st.caption("Para o dono da loja: o app não conseguiu conectar no banco de dados. Confira, nos Secrets do "
+               "Streamlit, se o endereço do Supabase está certo e se a senha dentro dele foi trocada.")
+    st.stop()
 
 
 # ===============================================================
@@ -502,9 +779,6 @@ st.markdown(f"""
     /* Campo escondido que recebe a posição da arte arrastada com o mouse */
     [class*="st-key-pgeo_host_"] {{ position: absolute !important; width: 1px !important; height: 1px !important;
         overflow: hidden !important; opacity: 0 !important; }}
-    /* Botões escondidos que a mini fábrica aperta sozinha */
-    .st-key-mc_ocultos, .st-key-mc_host {{ position: absolute !important; width: 1px !important; height: 0 !important;
-        overflow: hidden !important; opacity: 0 !important; pointer-events: none !important; }}
     .btn-top {{
         position: fixed; bottom: 20px; right: 20px; background-color: {COR}; color: #ffffff !important;
         padding: 10px 15px; border-radius: 50px; text-decoration: none; font-weight: bold;
@@ -568,25 +842,8 @@ def area_clicavel(chave: str, conteudo_html: str, on_click=None, args=None, dica
         st.markdown(conteudo_html, unsafe_allow_html=True)
         return st.button(dica, key=f"fcb_{chave}", on_click=on_click, args=args or ())
 # ===============================================================
-# BANCO DE DADOS (arquivos CSV locais)
+# PRODUTOS, FRETE E REGISTROS
 # ===============================================================
-def ler_csv(arquivo: str, colunas: list) -> pd.DataFrame:
-    if os.path.exists(arquivo):
-        try:
-            df = pd.read_csv(arquivo, dtype=str).fillna("")
-            for c in colunas:
-                if c not in df.columns:
-                    df[c] = ""
-            return df[colunas]
-        except Exception:
-            pass
-    return pd.DataFrame(columns=colunas)
-
-
-def gravar_csv(arquivo: str, df: pd.DataFrame):
-    df.to_csv(arquivo, index=False)
-
-
 def produtos_iniciais() -> pd.DataFrame:
     linhas = []
     for cat, preco in PRECO_BASE.items():
@@ -704,10 +961,8 @@ def calcular_frete(uf: str, subtotal: float, empresa: bool = False):
 def registrar_clique(evento: str, categoria: str = "", produto: str = ""):
     """Guarda um clique anônimo (sem nome) para a seção Interesse do painel."""
     try:
-        df = ler_csv(ARQ_CLIQUES, COLUNAS_CLIQUES)
-        novo = pd.DataFrame([{"data": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                              "evento": evento, "categoria": categoria, "produto": produto}])
-        gravar_csv(ARQ_CLIQUES, pd.concat([df, novo], ignore_index=True))
+        anexar_linha(ARQ_CLIQUES, COLUNAS_CLIQUES, {"data": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                                                    "evento": evento, "categoria": categoria, "produto": produto})
     except Exception:
         pass
 
@@ -718,18 +973,15 @@ def numero_wpp(tel) -> str:
 
 
 def registrar_movimento(material: str, tipo: str, quantidade: float, referencia: str = ""):
-    mov = ler_csv(ARQ_MOVIMENTOS, COL_MOV)
-    novo = pd.DataFrame([{"data": datetime.now().strftime("%Y-%m-%d %H:%M"), "material": material,
-                          "tipo": tipo, "quantidade": round(float(quantidade), 2), "referencia": referencia}])
-    gravar_csv(ARQ_MOVIMENTOS, pd.concat([mov, novo], ignore_index=True))
+    anexar_linha(ARQ_MOVIMENTOS, COL_MOV, {"data": datetime.now().strftime("%Y-%m-%d %H:%M"), "material": material,
+                                           "tipo": tipo, "quantidade": round(float(quantidade), 2),
+                                           "referencia": referencia})
 
 
 def registrar_preco(material: str, fornecedor: str, preco: float, origem: str = "Cotação", data: str = ""):
     """Guarda o preço que o fornecedor cobrou, para o gráfico de preços."""
-    tabela = ler_csv(ARQ_PRECOS, COL_PRECO)
-    novo = pd.DataFrame([{"data": data or datetime.now().strftime("%Y-%m-%d"), "fornecedor": fornecedor,
-                          "material": material, "preco": round(float(preco), 2), "origem": origem}])
-    gravar_csv(ARQ_PRECOS, pd.concat([tabela, novo], ignore_index=True))
+    anexar_linha(ARQ_PRECOS, COL_PRECO, {"data": data or datetime.now().strftime("%Y-%m-%d"), "fornecedor": fornecedor,
+                                         "material": material, "preco": round(float(preco), 2), "origem": origem})
 
 
 def baixar_estoque(carrinho: list, id_pedido: str):
@@ -759,10 +1011,8 @@ def baixar_estoque(carrinho: list, id_pedido: str):
 def registrar_status(id_pedido: str, status: str):
     """Guarda cada mudança de situação do pedido (a mini fábrica usa para medir o rendimento)."""
     try:
-        hist = ler_csv(ARQ_HIST, COL_HIST)
-        novo = pd.DataFrame([{"data": datetime.now().strftime("%d/%m/%Y %H:%M"),
-                              "id_pedido": id_pedido, "status": status}])
-        gravar_csv(ARQ_HIST, pd.concat([hist, novo], ignore_index=True))
+        anexar_linha(ARQ_HIST, COL_HIST, {"data": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                                          "id_pedido": id_pedido, "status": status})
     except Exception:
         pass
 
@@ -846,21 +1096,20 @@ def analise_estoque(margem_dias: int = 7) -> pd.DataFrame:
                       if pd.notna(d) else "")
     est["repor"], est["comprar"], est["data_limite"] = repor, comprar, limite
     return est
-def salvar_previa(id_pedido: str, n: int, item: dict, p: dict) -> str:
-    """Guarda a imagem de como a peça ficou, para conferir antes de imprimir."""
+def salvar_previa(ref: str, n: int, item: dict, p: dict) -> str:
+    """Guarda no banco como a peça ficou, para conferir antes de imprimir."""
     try:
-        caminho = os.path.join(PASTA_ARTES, f"{id_pedido}_{n}_previa.html")
-        with open(caminho, "w", encoding="utf-8") as f:
-            f.write(html_mockup(p.get("tipo") or tipo_peca(item.get("categoria", "") + " " + item["nome"]),
-                                p.get("arte", ""), p, item["nome"], altura=360))
+        caminho = f"{PASTA_ARTES}/{ref}_{n}_previa.html"
+        _gravar_texto(caminho, html_mockup(p.get("tipo") or tipo_peca(item.get("categoria", "") + " " + item["nome"]),
+                                           p.get("arte", ""), p, item["nome"], altura=360))
         return caminho
     except Exception:
         return ""
 
 
-def salvar_artes(id_pedido: str) -> str:
-    """Grava as fotos/artes do carrinho na pasta artes e devolve a lista em texto (JSON)."""
-    os.makedirs(PASTA_ARTES, exist_ok=True)
+def salvar_artes(ref: str) -> str:
+    """Grava no banco as fotos/artes do carrinho e devolve a lista em texto (JSON).
+    Roda ANTES da trava, para a fila de gravar o pedido continuar rapidinha."""
     lista = []
     for n, item in enumerate(st.session_state.get("carrinho", []), start=1):
         p = item.get("perso") or {}
@@ -879,15 +1128,26 @@ def salvar_artes(id_pedido: str) -> str:
                 cab, b64 = p["arte"].split(",", 1)
                 dados = base64.b64decode(b64)
             ext = "png" if "png" in cab else "webp" if "webp" in cab else "jpg"
-            caminho = os.path.join(PASTA_ARTES, f"{id_pedido}_{n}.{ext}")
-            with open(caminho, "wb") as f:
-                f.write(dados)
+            if dados:
+                caminho = f"{PASTA_ARTES}/{ref}_{n}.{ext}"
+                gravar_bin(caminho, dados)
         lista.append({"item": item["nome"], "quantidade": item["quantidade"], "arquivo": caminho,
                       "texto": p.get("texto", ""), "fonte": p.get("fonte", ""), "cor_texto": p.get("cor_texto", ""),
                       "obs": p.get("obs", ""), "arte_nome": p.get("arte_nome", ""), "geo": p.get("geo") or {},
                       "cor_peca": p.get("cor_peca", "Branco"), "lado": p.get("lado", "Frente"),
-                      "tipo": p.get("tipo", ""), "previa": salvar_previa(id_pedido, n, item, p)})
+                      "tipo": p.get("tipo", ""), "previa": salvar_previa(ref, n, item, p)})
     return json.dumps(lista, ensure_ascii=False) if lista else ""
+
+
+def ler_previa(caminho: str):
+    """Prévia de como o cliente montou a peça (do banco; pedidos antigos podem estar no computador)."""
+    if not caminho:
+        return None
+    txt = _ler_texto(caminho)
+    if not txt and os.path.exists(caminho):
+        with open(caminho, encoding="utf-8") as f:
+            txt = f.read()
+    return txt
 
 
 def registrar_pedido(nome: str, telefone: str, email: str, itens_txt: str, total: float, forma: str):
@@ -895,10 +1155,22 @@ def registrar_pedido(nome: str, telefone: str, email: str, itens_txt: str, total
     frete = st.session_state.get("frete") or {}
     empresa = st.session_state.get("empresa") or {}
     tipo = "Empresa" if st.session_state.get("modo") == "empresa" else "Cliente"
-    endereco = ", ".join(p for p in [frete.get("rua", ""), frete.get("bairro", "")] if p)
+    numero_casa = st.session_state.get("cli_numero", "").strip()
+    complemento = st.session_state.get("cli_comp", "").strip()
+    endereco = ", ".join(p for p in [frete.get("rua", ""), numero_casa, complemento, frete.get("bairro", "")] if p)
     if frete:
         endereco += f" - {frete.get('cidade', '')}/{frete.get('uf', '')} CEP {frete.get('cep', '')}"
+    # 1) Fotos e artes vão para o banco antes (pode demorar uns segundos e não segura a fila)
+    personalizacao = salvar_artes(f"{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8]}")
 
+    # 2) Agora a parte rápida, um pedido de cada vez: número do pedido + gravar
+    with trava():
+        return _gravar_pedido_e_cliente(agora, nome, telefone, email, itens_txt, total, forma, tipo, frete,
+                                        empresa, endereco, numero_casa, complemento, personalizacao)
+
+
+def _gravar_pedido_e_cliente(agora, nome, telefone, email, itens_txt, total, forma, tipo, frete, empresa,
+                             endereco, numero_casa, complemento, personalizacao) -> str:
     pedidos = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
     numeros = pd.to_numeric(pedidos["id_pedido"].astype(str).str.replace("PED-", "", regex=False),
                             errors="coerce").dropna()
@@ -911,10 +1183,10 @@ def registrar_pedido(nome: str, telefone: str, email: str, itens_txt: str, total
         "previsao_entrega": "", "obs_internas": "", "tipo_cliente": tipo,
         "cpf_cnpj": empresa.get("cnpj", ""), "endereco_entrega": endereco,
         "nf_status": "Não emitida", "nf_numero": "", "nf_chave": "", "nf_link": "",
-        "ent_rua": frete.get("rua", ""), "ent_numero": st.session_state.get("cli_numero", "").strip(),
-        "ent_complemento": st.session_state.get("cli_comp", "").strip(), "ent_bairro": frete.get("bairro", ""),
+        "ent_rua": frete.get("rua", ""), "ent_numero": numero_casa,
+        "ent_complemento": complemento, "ent_bairro": frete.get("bairro", ""),
         "ent_cidade": frete.get("cidade", ""), "ent_uf": frete.get("uf", ""), "ent_cep": frete.get("cep", ""),
-        "ent_peso": "", "personalizacao": salvar_artes(id_pedido),
+        "ent_peso": "", "personalizacao": personalizacao,
         "itens_json": json.dumps([{"categoria": i.get("categoria", ""), "nome": i["nome"],
                                    "quantidade": i["quantidade"]}
                                   for i in st.session_state.get("carrinho", [])], ensure_ascii=False),
@@ -930,7 +1202,8 @@ def registrar_pedido(nome: str, telefone: str, email: str, itens_txt: str, total
         novo_cli = pd.DataFrame([{
             "data": agora, "nome": nome, "telefone": telefone, "qtd_pedidos": 1, "email": email,
             "cep": frete.get("cep", ""),
-            "endereco": ", ".join(p for p in [frete.get("rua", ""), frete.get("bairro", "")] if p),
+            "endereco": ", ".join(p for p in [frete.get("rua", ""), numero_casa, complemento,
+                                              frete.get("bairro", "")] if p),
             "cidade": frete.get("cidade", ""), "uf": frete.get("uf", ""),
             "origem": "Site", "status": "Novo", "ultimo_contato": agora, "tipo": tipo,
             "cpf_cnpj": empresa.get("cnpj", ""), "razao_social": empresa.get("razao_social", ""),
@@ -1130,6 +1403,8 @@ def email_valido(email: str) -> bool:
 
 def finalizar_pedido():
     """Valida os dados, grava o pedido e gera o link do WhatsApp."""
+    if st.session_state.get("link_whatsapp"):
+        return  # pedido já registrado (clique duplo); só muda se o carrinho mudar
     nome = st.session_state.get("cli_nome", "").strip()
     telefone = "".join(ch for ch in st.session_state.get("cli_tel", "") if ch.isdigit())
     email = st.session_state.get("cli_email", "").strip()
@@ -1143,6 +1418,17 @@ def finalizar_pedido():
     subtotal, qtd, pct, valor_desc, total = totais_carrinho()
     if modo_empresa() and subtotal < LOJA["empresa_pedido_minimo"]:
         st.session_state.erro_cliente = f"O pedido mínimo para empresas é R$ {LOJA['empresa_pedido_minimo']:.2f}."
+        return
+    # O pedido só sai com endereço: precisa calcular o frete (CEP) e informar o número da casa
+    frete_ok = st.session_state.get("frete")
+    if not frete_ok:
+        st.session_state.erro_cliente = "Calcule o frete com o seu CEP antes de finalizar."
+        return
+    if abs(frete_ok["total_na_hora"] - total) > 0.01:
+        st.session_state.erro_cliente = "O carrinho mudou. Clique em Calcular frete de novo."
+        return
+    if not st.session_state.get("cli_numero", "").strip():
+        st.session_state.erro_cliente = "Preencha o número da casa (ou escreva S/N)."
         return
     st.session_state.erro_cliente = None
 
@@ -1167,12 +1453,14 @@ def finalizar_pedido():
         id_pedido = registrar_pedido(nome, telefone, email, "; ".join(linhas) + extra_frete,
                                      total_com_frete, forma)
         st.session_state.ultimo_pedido_id = id_pedido
-    except Exception:
-        pass  # se o registro falhar, o cliente ainda consegue enviar o pedido
+    except Exception as erro:
+        print("Falha ao registrar pedido:", type(erro).__name__, erro)
+        # se o registro falhar, o cliente ainda consegue enviar o pedido pelo WhatsApp
 
     bloco_entrega = ""
     if frete:
-        endereco = ", ".join(p for p in [frete["rua"], frete["bairro"]] if p)
+        endereco = ", ".join(p for p in [frete["rua"], st.session_state.get("cli_numero", "").strip(),
+                                         st.session_state.get("cli_comp", "").strip(), frete["bairro"]] if p)
         texto_frete = "Grátis" if valor_frete == 0 else f"R$ {valor_frete:.2f}"
         bloco_entrega = (f"\n\n*Entrega:* {endereco} - {frete['cidade']}/{frete['uf']} (CEP {frete['cep']})"
                          f"\n*Frete:* {texto_frete} (prazo estimado: {frete['prazo']} dias úteis)")
@@ -1756,67 +2044,113 @@ conteúdo inflamável, explosivo, causador de combustão ou qualquer outro proib
 # ===============================================================
 ARQUIVOS_DADOS = [ARQ_PRODUTOS, ARQ_CLIENTES, ARQ_PEDIDOS, ARQ_FRETE, ARQ_CLIQUES,
                   ARQ_LOJA, ARQ_APRESENTACOES, ARQ_VITRINE, ARQ_ARTES_PRONTAS,
-                  ARQ_FORNECEDORES, ARQ_ESTOQUE, ARQ_COMPRAS, ARQ_MOVIMENTOS, ARQ_PRECOS,
-                  ARQ_EQUIPE, ARQ_HIST, ARQ_VIDA]
+                  ARQ_FORNECEDORES, ARQ_ESTOQUE, ARQ_COMPRAS, ARQ_MOVIMENTOS, ARQ_PRECOS, ARQ_HIST, ARQ_CHAT]
+
+
+def _nomes_textos() -> list:
+    """Tudo o que está guardado como texto: listas (pedidos, clientes...) e as prévias das artes."""
+    if URL_BANCO:
+        with _banco().connect() as c:
+            nomes = [r[0] for r in c.execute(_sql("SELECT nome FROM arquivos"))]
+    else:
+        nomes = [a for a in ARQUIVOS_DADOS if os.path.exists(a)]
+        if os.path.isdir(PASTA_ARTES):
+            nomes += [f"{PASTA_ARTES}/{n}" for n in os.listdir(PASTA_ARTES) if n.endswith(".html")]
+    return sorted(set(nomes) | (ANEXOS & set(ARQUIVOS_DADOS)))
+
+
+def _todos_binarios():
+    """Fotos e artes enviadas pelos clientes."""
+    if URL_BANCO:
+        with _banco().connect() as c:
+            for nome, dados in c.execute(_sql("SELECT nome, dados FROM binarios ORDER BY nome")):
+                yield nome, bytes(dados)
+    elif os.path.isdir(PASTA_ARTES):
+        for n in os.listdir(PASTA_ARTES):
+            if not n.endswith(".html"):
+                with open(os.path.join(PASTA_ARTES, n), "rb") as f:
+                    yield f"{PASTA_ARTES}/{n}", f.read()
 
 
 def gerar_backup_zip() -> bytes:
+    """Um .zip com TUDO: pedidos, clientes, produtos, fotos e artes dos clientes, configurações."""
+    colunas = {ARQ_CLIQUES: COLUNAS_CLIQUES, ARQ_MOVIMENTOS: COL_MOV, ARQ_HIST: COL_HIST, ARQ_PRECOS: COL_PRECO,
+               ARQ_CHAT: COL_CHAT}
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for arq in ARQUIVOS_DADOS:
-            if os.path.exists(arq):
-                z.write(arq, arcname=arq)
+        for nome in _nomes_textos():
+            if nome in ANEXOS:
+                conteudo = ler_csv(nome, colunas[nome]).to_csv(index=False)
+            else:
+                conteudo = _ler_texto(nome)
+            if conteudo is not None:
+                z.writestr(nome, conteudo)
+        for nome, dados in _todos_binarios():
+            z.writestr(nome, dados)
         if os.path.isdir(PASTA_VIDEOS):
             for nome in os.listdir(PASTA_VIDEOS):
                 z.write(os.path.join(PASTA_VIDEOS, nome), arcname=f"{PASTA_VIDEOS}/{nome}")
-        if os.path.isdir(PASTA_ARTES):
-            for nome in os.listdir(PASTA_ARTES):
-                z.write(os.path.join(PASTA_ARTES, nome), arcname=f"{PASTA_ARTES}/{nome}")
         prod = ler_csv(ARQ_PRODUTOS, COLUNAS_PRODUTOS).copy()
         prod["imagem"] = prod["imagem"].apply(lambda u: "(foto enviada)" if str(u).startswith("data:") else u)
         z.writestr("LEIA-ME/produtos_para_excel.csv", prod.to_csv(index=False, sep=";").encode("utf-8-sig"))
         cli = ler_csv(ARQ_CLIENTES, COLUNAS_CLIENTES)
         z.writestr("LEIA-ME/clientes_para_excel.csv", cli.to_csv(index=False, sep=";").encode("utf-8-sig"))
+        ped = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
+        z.writestr("LEIA-ME/pedidos_para_excel.csv",
+                   ped.drop(columns=["personalizacao", "itens_json"]).to_csv(index=False, sep=";").encode("utf-8-sig"))
         z.writestr("LEIA-ME/LEIA-ME.txt",
-                   "Backup completo da loja.\n"
+                   "Backup completo da loja: pedidos, clientes, produtos, fotos e artes dos clientes.\n"
                    "Para restaurar: no painel, seção Backup, envie este mesmo arquivo .zip.\n"
                    "A pasta LEIA-ME tem planilhas para abrir no Excel (não são usadas na restauração).\n")
     return buf.getvalue()
 
 
 def restaurar_backup_zip(arquivo) -> int:
+    """Devolve para o banco tudo o que está no .zip (também aceita os backups antigos)."""
     restaurados = 0
-    with zipfile.ZipFile(arquivo) as z:
+    with zipfile.ZipFile(arquivo) as z, trava():
         for nome in z.namelist():
-            if nome.startswith(("/", "\\")) or ".." in nome.replace("\\", "/").split("/"):
+            if nome.startswith(("/", "\\")) or ".." in nome.replace("\\", "/").split("/") or nome.endswith("/"):
                 continue  # segurança: não deixa o zip gravar fora da pasta da loja
-            if nome in ARQUIVOS_DADOS or (nome.split("/")[0] in (PASTA_VIDEOS, PASTA_ARTES) and not nome.endswith("/")):
-                os.makedirs(os.path.dirname(nome) or ".", exist_ok=True)
+            pasta = nome.split("/")[0]
+            if nome in ARQUIVOS_DADOS or nome in ("dados_equipe.json", "dados_cidade_vida.json"):
+                if nome in ("dados_equipe.json", "dados_cidade_vida.json"):
+                    continue  # eram da cidade 3D, que saiu
+                texto = z.read(nome).decode("utf-8")
+                if nome in ANEXOS:
+                    gravar_csv(nome, pd.read_csv(io.StringIO(texto), dtype=str).fillna("") if texto.strip()
+                               else pd.DataFrame())
+                else:
+                    _gravar_texto(nome, texto)
+            elif pasta == PASTA_ARTES:
+                if nome.endswith(".html"):
+                    _gravar_texto(nome, z.read(nome).decode("utf-8"))
+                else:
+                    gravar_bin(nome, z.read(nome))
+            elif pasta == PASTA_VIDEOS:
+                os.makedirs(PASTA_VIDEOS, exist_ok=True)
                 with open(nome, "wb") as f:
                     f.write(z.read(nome))
-                restaurados += 1
+            else:
+                continue
+            restaurados += 1
     return restaurados
 
 
 # ===============================================================
-# MINI FÁBRICA AO VIVO (prédio com a equipe trabalhando com os dados reais)
+# MUDAR A SITUAÇÃO DO PEDIDO (Mesa do chefe, esteira e entregas)
 # ===============================================================
-NAV_CIDADE = {"resumo": "📊 Resumo", "pedidos": "🧾 Pedidos", "clientes": "👥 Clientes", "artes": "🖨️ Artes",
-              "estoque": "🏭 Estoque e compras", "etiquetas": "🏷️ Etiquetas", "rastreio": "🚚 Rastreio",
-              "ao_vivo": "🏙️ Empresa ao vivo"}
-VERSAO_MOTOR = "mc3d1"
-
-
 def mudar_status(id_pedido: str, novo_status: str):
     """Muda a situação do pedido e faz o resto sozinho (histórico e baixa do estoque)."""
-    ped = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
-    alvo = ped["id_pedido"] == id_pedido
-    if not alvo.any():
-        return
-    antigo = ped.loc[alvo, "status"].iloc[0]
-    ped.loc[alvo, "status"] = novo_status
-    gravar_csv(ARQ_PEDIDOS, ped)
-    depois_de_mudar_status(id_pedido, antigo, novo_status)
+    with trava():
+        ped = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
+        alvo = ped["id_pedido"] == id_pedido
+        if not alvo.any():
+            return
+        antigo = ped.loc[alvo, "status"].iloc[0]
+        ped.loc[alvo, "status"] = novo_status
+        gravar_csv(ARQ_PEDIDOS, ped)
+        depois_de_mudar_status(id_pedido, antigo, novo_status)
 
 
 def decidir_pedido(id_pedido: str, novo_status: str):
@@ -1824,1254 +2158,292 @@ def decidir_pedido(id_pedido: str, novo_status: str):
     mudar_status(id_pedido, novo_status)
 
 
-def carregar_equipe() -> list:
-    return ler_json(ARQ_EQUIPE, EQUIPE_PADRAO)
+def atualizar_pedido(id_pedido: str, campos: dict):
+    """Muda só os campos de UM pedido, lendo a lista na hora, dentro da trava.
+    Assim, se um cliente fizer um pedido enquanto você salva, o pedido dele não some."""
+    with trava():
+        ped = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
+        alvo = ped["id_pedido"] == id_pedido
+        if not alvo.any():
+            return
+        antigo = ped.loc[alvo, "status"].iloc[0]
+        for campo, valor in campos.items():
+            ped.loc[alvo, campo] = valor
+        gravar_csv(ARQ_PEDIDOS, ped)
+        if "status" in campos:
+            depois_de_mudar_status(id_pedido, antigo, campos["status"])
 
 
-def _dono(id_pedido, n: int) -> int:
-    """Divide os pedidos entre as pessoas do setor, sempre do mesmo jeito."""
-    if n <= 0:
-        return 0
-    return int("".join(c for c in str(id_pedido) if c.isdigit()) or 0) % n
+# ===============================================================
+# CHAT DA LOJA (assistente automático + atendimento ao vivo com você)
+# O assistente responde sozinho pelas palavras da pergunta. Se não resolver, o cliente chama uma pessoa
+# e vê se você está online. Tudo (perguntas, respostas, mensagens e horário) se edita no painel.
+# ===============================================================
+DIAS_SEMANA = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
+QUEM_CHAT = {"cliente": ("user", "🙂"), "robo": ("assistant", "🤖"), "loja": ("assistant", "🧑‍💼")}
 
 
-def _espera(dt, agora) -> str:
-    if pd.isna(dt):
-        return "?"
-    horas = int((agora - dt).total_seconds() // 3600)
-    return f"{horas // 24} dia(s)" if horas >= 24 else (f"{horas}h" if horas >= 1 else "menos de 1h")
+@st.cache_resource(show_spinner=False)
+def _presenca() -> dict:
+    """Guarda (na memória do servidor) se você está com o painel aberto e disponível no chat."""
+    return {"visto": 0.0, "disponivel": True}
 
 
-def _atrasado(p, agora) -> bool:
-    if p["status"] in ("Entregue", "Cancelado"):
+def marcar_dono_online():
+    _presenca()["visto"] = time.time()
+
+
+def dono_online() -> bool:
+    p = _presenca()
+    return p["disponivel"] and (time.time() - p["visto"]) < 150  # visto nos últimos 2,5 minutos
+
+
+def _hora(txt, padrao: str) -> tuple:
+    try:
+        h, m = str(txt).strip().split(":")[:2]
+        return int(h), int(m)
+    except Exception:
+        h, m = padrao.split(":")
+        return int(h), int(m)
+
+
+def texto_horario() -> str:
+    dias = sorted(int(d) for d in LOJA.get("exp_dias", [0, 1, 2, 3, 4]))
+    if not dias:
+        return "a combinar pelo WhatsApp"
+    seguidos = dias == list(range(dias[0], dias[-1] + 1))
+    nomes = (f"de {DIAS_SEMANA[dias[0]]} a {DIAS_SEMANA[dias[-1]]}" if seguidos and len(dias) > 2
+             else ", ".join(DIAS_SEMANA[d] for d in dias))
+    hi, mi = _hora(LOJA.get("exp_inicio"), "08:00")
+    hf, mf = _hora(LOJA.get("exp_fim"), "18:00")
+    return f"{nomes}, das {hi:02d}:{mi:02d} às {hf:02d}:{mf:02d}"
+
+
+def em_expediente(agora: datetime = None) -> bool:
+    agora = agora or datetime.now()
+    if agora.weekday() not in [int(d) for d in LOJA.get("exp_dias", [0, 1, 2, 3, 4])]:
         return False
-    try:
-        return datetime.strptime(str(p["previsao_entrega"]).strip(), "%d/%m/%Y").date() < agora.date()
-    except Exception:
-        return bool(pd.notna(p["dt"]) and (agora - p["dt"]).days > 7)
+    hi, mi = _hora(LOJA.get("exp_inicio"), "08:00")
+    hf, mf = _hora(LOJA.get("exp_fim"), "18:00")
+    minutos = agora.hour * 60 + agora.minute
+    return hi * 60 + mi <= minutos < hf * 60 + mf
 
 
-def _resumo(p, n: int = 3) -> str:
-    itens = itens_do_pedido(p)
-    if not itens:
-        return str(p["itens"]).split(" | Frete")[0][:80]
-    txt = ", ".join(f"{i['quantidade']}x {i['nome']}" for i in itens[:n])
-    return txt + (f" +{len(itens) - n}" if len(itens) > n else "")
+def preencher(msg: str) -> str:
+    """Troca {loja}, {horario}, {link}, {whatsapp}, {frete_gratis} e {atendente} pelos dados da loja."""
+    frete = (f"Frete grátis em pedidos a partir de R$ {LOJA['frete_gratis_acima']:.2f}."
+             if LOJA.get("frete_gratis_ligado") and LOJA.get("frete_gratis_acima", 0) > 0 else "")
+    trocas = {"{loja}": LOJA["nome_empresa"], "{horario}": texto_horario(), "{frete_gratis}": frete,
+              "{link}": LOJA.get("link_loja") or "(endereço da loja)", "{whatsapp}": LOJA.get("whatsapp", ""),
+              "{atendente}": LOJA.get("chat_nome_atendente") or "a equipe"}
+    for k, v in trocas.items():
+        msg = str(msg).replace(k, str(v))
+    return msg.replace("  ", " ").strip()
 
 
-def _cor_ok(c: str, padrao: str) -> str:
-    import re
-    return c if re.fullmatch(r"#[0-9a-fA-F]{3,8}", str(c or "")) else padrao
+def _normal(texto: str) -> str:
+    import unicodedata
+    t = unicodedata.normalize("NFKD", str(texto)).encode("ascii", "ignore").decode("ascii").lower()
+    return " ".join("".join(c if c.isalnum() else " " for c in t).split())
 
 
-DONO_PADRAO = {"nome": "Você (dono)", "pele": "Média", "cabelo": "Castanho", "estilo": "Curto", "camisa": "#7c3aed"}
-TRANSPORTES = [("bicicleta 🚲", 900, 500), ("moto 🏍️", 9000, 7000), ("carro 🚗", 40000, 32000)]
+def resposta_automatica(texto: str):
+    """O assistente: procura a pergunta cadastrada que tem mais palavras parecidas com a do cliente."""
+    t = f" {_normal(texto)} "
+    melhor, pontos = None, 0
+    for p in LOJA.get("chat_perguntas", []):
+        chaves = [_normal(k) for k in str(p.get("palavras", "")).split(",") if _normal(k)]
+        chaves += [w for w in _normal(p.get("pergunta", "")).split() if len(w) > 3]
+        n = 0
+        for k in set(chaves):
+            raiz = k if " " in k or len(k) <= 4 else k[:5] if len(k) > 5 else k[:-1]  # "quebrou" acha "quebrado"
+            if f" {k} " in t or (" " not in k and f" {raiz}" in t):
+                n += 2 if " " in k else 1
+        if n > pontos:
+            melhor, pontos = p, n
+    return preencher(melhor["resposta"]) if melhor else None
 
 
-def expediente() -> dict:
-    """Horário comercial da mini cidade (você muda no painel, em Empresa ao vivo)."""
-    return {"ini": float(LOJA.get("exp_inicio", 8)), "fim": float(LOJA.get("exp_fim", 18)),
-            "alm_ini": float(LOJA.get("exp_almoco", 12)), "alm_fim": float(LOJA.get("exp_almoco", 12)) + 1,
-            "dias": [int(x) for x in LOJA.get("exp_dias", [0, 1, 2, 3, 4])]}
+def mensagens_chat(conversa: str = None) -> pd.DataFrame:
+    df = ler_csv(ARQ_CHAT, COL_CHAT)
+    return df[df["conversa"] == conversa].reset_index(drop=True) if conversa else df
 
 
-def _em_expediente(t: datetime, e: dict) -> bool:
-    h = t.hour + t.minute / 60
-    return t.weekday() in e["dias"] and e["ini"] <= h < e["fim"] and not (e["alm_ini"] <= h < e["alm_fim"])
+def gravar_msg(conversa: str, quem: str, texto: str, nome: str = ""):
+    anexar_linha(ARQ_CHAT, COL_CHAT, {"data": datetime.now().strftime("%d/%m/%Y %H:%M"), "conversa": conversa,
+                                      "quem": quem, "nome": nome[:60], "texto": str(texto)[:800]})
 
 
-def atualizar_vida(nomes: list, validos: pd.DataFrame, agora: datetime) -> dict:
-    """Economia de mentirinha (moedas 🪙), separada do dinheiro real da loja.
-    Salário por hora de expediente + bônus quando a loja vende de verdade. Gastos com almoço, café e aluguel.
-    Com dinheiro sobrando, compram bicicleta, moto, carro, roupa nova e mudam para apartamento."""
-    vida = ler_json(ARQ_VIDA, {})
-    pessoas = vida.setdefault("pessoas", {})
-    festas = [f for f in vida.get("festas", []) if f.get("ate", 0) > agora.timestamp() * 1000]
-    try:
-        ult = datetime.fromisoformat(vida.get("ultima", ""))
-    except Exception:
-        ult = agora
-    try:
-        ult_rec = datetime.fromisoformat(vida.get("ultima_receita", ""))
-    except Exception:
-        ult_rec = agora
-    ult = max(ult, agora - timedelta(days=3))
-    e = expediente()
-    sal = float(LOJA.get("cidade_salario_hora", 15))
-    passos = int((agora - ult).total_seconds() // 900)
-    horas, almocos, dias = 0.0, 0, 0
-    t = ult
-    for _ in range(passos):
-        t += timedelta(minutes=15)
-        if _em_expediente(t, e):
-            horas += 0.25
-        if t.weekday() in e["dias"] and t.hour == int(e["alm_ini"]) and t.minute < 15:
-            almocos += 1
-        if t.hour == 0 and t.minute < 15:
-            dias += 1
-    novos_ped = validos[(validos["dt"] > ult_rec) & (validos["dt"] <= agora)]
-    receita = float(novos_ped["total_num"].sum()) if len(novos_ped) else 0.0
-    dono_nome = "__dono__"
-    for nome in list(nomes) + [dono_nome]:
-        p = pessoas.setdefault(nome, {"dinheiro": 2000.0 if nome == dono_nome else 800.0, "transporte": 0, "casa": 0,
-                                      "roupa": 0, "extrato": [], "ultima_roupa": ""})
-        aluguel = 1800 if p["casa"] else 700
-        if nome == dono_nome:
-            ganho, gasto = receita * 0.30, almocos * 30 + dias * 2500 / 30
+def resumo_conversas() -> pd.DataFrame:
+    """Uma linha por conversa: quem é, última mensagem e se está esperando a sua resposta."""
+    df = mensagens_chat()
+    if df.empty:
+        return pd.DataFrame(columns=["conversa", "nome", "ultima", "data", "esperando", "qtd"])
+    linhas = []
+    for conv, g in df.groupby("conversa", sort=False):
+        humano, esperando = False, False
+        for _, m in g.iterrows():
+            if m["quem"] == "sistema" and m["texto"] == "chamou_atendente":
+                humano, esperando = True, True
+            elif m["quem"] == "sistema" and m["texto"] == "encerrado":
+                humano, esperando = False, False
+            elif m["quem"] == "cliente" and humano:
+                esperando = True
+            elif m["quem"] == "loja":
+                esperando = False
+        nomes = [n for n in g["nome"] if n]
+        visiveis = g[g["quem"] != "sistema"]
+        ult = visiveis.iloc[-1] if len(visiveis) else g.iloc[-1]
+        linhas.append({"conversa": conv, "nome": nomes[-1] if nomes else "Visitante", "ultima": ult["texto"],
+                       "data": g.iloc[-1]["data"], "esperando": esperando, "humano": humano, "qtd": len(visiveis)})
+    res = pd.DataFrame(linhas)
+    res["_dt"] = pd.to_datetime(res["data"], format="%d/%m/%Y %H:%M", errors="coerce")
+    return res.sort_values(["esperando", "_dt"], ascending=[False, False]).reset_index(drop=True)
+
+
+def _conversa_atual() -> str:
+    """Cada visitante tem a sua conversa (fica no endereço da página, então não se perde ao recarregar)."""
+    conv = st.session_state.get("chat_id") or st.query_params.get("chat")
+    if not conv or len(str(conv)) > 20 or not str(conv).isalnum():
+        conv = uuid.uuid4().hex[:12]
+    st.session_state.chat_id = conv
+    return conv
+
+
+def _status_atendimento() -> tuple:
+    if dono_online():
+        return "🟢", "Online agora"
+    if em_expediente():
+        return "🟡", "Respondemos em breve"
+    return "🌙", "Fora do horário"
+
+
+def _aviso_sem_atendente(conv: str):
+    """Mensagem automática quando ninguém está online (no máximo uma a cada 30 minutos)."""
+    msgs = mensagens_chat(conv)
+    autos = msgs[(msgs["quem"] == "robo") & msgs["texto"].isin(
+        [preencher(LOJA["chat_fora_expediente"]), preencher(LOJA["chat_offline"])])]
+    if len(autos):
+        dt = pd.to_datetime(autos.iloc[-1]["data"], format="%d/%m/%Y %H:%M", errors="coerce")
+        if pd.notna(dt) and datetime.now() - dt < timedelta(minutes=30):
+            return
+    texto = LOJA["chat_offline"] if em_expediente() else LOJA["chat_fora_expediente"]
+    gravar_msg(conv, "robo", preencher(texto))
+
+
+def _em_atendimento(conv: str) -> bool:
+    r = resumo_conversas()
+    linha = r[r["conversa"] == conv]
+    return bool(len(linha) and linha.iloc[0]["humano"])
+
+
+def _limite_ok(conv: str) -> bool:
+    msgs = mensagens_chat(conv)
+    return int((msgs["quem"] == "cliente").sum()) < 60  # proteção contra quem fica mandando sem parar
+
+
+def _chat_pergunta_rapida(conv: str, p: dict):
+    nome = st.session_state.get("chat_nome", "").strip()
+    if not _limite_ok(conv):
+        return
+    st.query_params["chat"] = conv
+    gravar_msg(conv, "cliente", p["pergunta"], nome)
+    gravar_msg(conv, "robo", preencher(p["resposta"]))
+    registrar_clique("chat_pergunta", "", p["pergunta"])
+
+
+def _chat_enviar(conv: str):
+    texto = st.session_state.get(f"chat_txt_{conv}", "").strip()
+    nome = st.session_state.get("chat_nome", "").strip()
+    st.session_state[f"chat_txt_{conv}"] = ""
+    if not texto or not _limite_ok(conv):
+        return
+    st.query_params["chat"] = conv
+    gravar_msg(conv, "cliente", texto[:500], nome)
+    if _em_atendimento(conv):
+        if not dono_online():
+            _aviso_sem_atendente(conv)
+        return
+    resp = resposta_automatica(texto)
+    if resp:
+        gravar_msg(conv, "robo", resp)
+        gravar_msg(conv, "robo", preencher(LOJA["chat_resolveu"]))
+    else:
+        gravar_msg(conv, "robo", preencher(LOJA["chat_nao_entendi"]))
+
+
+def _chat_chamar_pessoa(conv: str):
+    st.query_params["chat"] = conv
+    nome = st.session_state.get("chat_nome", "").strip()
+    gravar_msg(conv, "sistema", "chamou_atendente", nome)
+    if dono_online():
+        gravar_msg(conv, "robo", preencher(LOJA["chat_chamando"]))
+    else:
+        _aviso_sem_atendente(conv)
+
+
+def _desenhar_chat_cliente(conv: str, ao_vivo: bool):
+    msgs = mensagens_chat(conv)
+    em_atend = _em_atendimento(conv)
+    if em_atend and not ao_vivo:
+        st.rerun()  # passou a falar com uma pessoa: liga a atualização automática da conversa
+    with st.container(height=280, border=False):
+        with st.chat_message("assistant", avatar="🤖"):
+            st.markdown(html.escape(preencher(LOJA["chat_boas_vindas"])))
+        for _, m in msgs.iterrows():
+            if m["quem"] not in QUEM_CHAT:
+                continue
+            papel, avatar = QUEM_CHAT[m["quem"]]
+            with st.chat_message(papel, avatar=avatar):
+                if m["quem"] == "loja":
+                    st.caption(m["nome"] or LOJA.get("chat_nome_atendente") or "Atendente")
+                st.markdown(html.escape(m["texto"]).replace("\n", "  \n"))
+    if not em_atend:
+        perguntas = LOJA.get("chat_perguntas", [])
+        for i in range(0, len(perguntas), 2):
+            for c, p in zip(st.columns(2), perguntas[i:i + 2]):
+                c.button(p["pergunta"], key=f"chatp_{conv}_{i}_{p['pergunta'][:12]}", use_container_width=True,
+                         on_click=_chat_pergunta_rapida, args=(conv, p))
+    with st.form(f"chat_form_{conv}", clear_on_submit=False, border=False):
+        st.text_input("Sua mensagem", key=f"chat_txt_{conv}", placeholder="Escreva a sua dúvida...",
+                      label_visibility="collapsed", max_chars=500)
+        st.form_submit_button("Enviar ➤", use_container_width=True, on_click=_chat_enviar, args=(conv,))
+    if not em_atend:
+        st.button("🙋 Falar com uma pessoa", key=f"chat_humano_{conv}", use_container_width=True,
+                  on_click=_chat_chamar_pessoa, args=(conv,))
+    else:
+        st.caption("🙋 Você está falando com a equipe. A resposta aparece aqui sozinha.")
+    texto = urllib.parse.quote(f"Olá! Vim pelo chat da loja e quero tirar uma dúvida.")
+    st.link_button("💬 Prefiro o WhatsApp", f"https://wa.me/{LOJA['whatsapp']}?text={texto}",
+                   use_container_width=True)
+
+
+@st.fragment
+def _chat_cliente_parado(conv: str):
+    _desenhar_chat_cliente(conv, ao_vivo=False)
+
+
+@st.fragment(run_every=5)
+def _chat_cliente_ao_vivo(conv: str):
+    """Quando o cliente chama uma pessoa, a conversa se atualiza sozinha a cada 5 segundos."""
+    _desenhar_chat_cliente(conv, ao_vivo=True)
+
+
+def chat_cliente():
+    """A caixinha de chat na barra da esquerda da loja."""
+    if not LOJA.get("chat_ligado", True):
+        return
+    conv = _conversa_atual()
+    bola, situacao = _status_atendimento()
+    st.markdown(f"<div style='text-align:center;font-size:.8rem;color:#4a5568;'>{bola} Atendimento: "
+                f"<b>{situacao}</b></div>", unsafe_allow_html=True)
+    with st.expander("💬 Chat: tire suas dúvidas aqui"):
+        st.caption(f"{bola} {situacao} · Horário: {texto_horario()}")
+        st.text_input("Seu nome (opcional)", key="chat_nome", max_chars=60)
+        if _em_atendimento(conv):
+            _chat_cliente_ao_vivo(conv)
         else:
-            ganho = horas * sal + (receita * 0.10 / max(1, len(nomes)))
-            gasto = almocos * 25 + horas / 4 * 6 + dias * aluguel / 30
-        if ganho >= 1:
-            p["extrato"].append(f"{agora.strftime('%d/%m %H:%M')} + {ganho:,.0f} 🪙 ({'lucro da loja' if nome == dono_nome else 'salário e bônus'})")
-        if gasto >= 1:
-            p["extrato"].append(f"{agora.strftime('%d/%m %H:%M')} − {gasto:,.0f} 🪙 (almoço, café e contas)")
-        p["dinheiro"] = max(0.0, float(p["dinheiro"]) + ganho - gasto)
-        compra = None
-        if p["transporte"] < 3:
-            nome_t, minimo, preco = TRANSPORTES[p["transporte"]]
-            if p["dinheiro"] >= minimo:
-                p["dinheiro"] -= preco
-                p["transporte"] += 1
-                compra = f"comprou {'uma' if p['transporte'] < 3 else 'um'} {nome_t}"
-        if not compra and not p["casa"] and p["dinheiro"] >= 15000:
-            p["dinheiro"] -= 5000
-            p["casa"] = 1
-            compra = "se mudou para um apartamento 🏢"
-        if not compra and p["dinheiro"] >= 2500:
-            try:
-                ultima_roupa = datetime.fromisoformat(p.get("ultima_roupa") or "2000-01-01")
-            except Exception:
-                ultima_roupa = datetime(2000, 1, 1)
-            if (agora - ultima_roupa).days >= 14:
-                p["dinheiro"] -= 400
-                p["roupa"] = min(2, p["roupa"] + 1)
-                p["ultima_roupa"] = agora.isoformat()
-                p["extrato"].append(f"{agora.strftime('%d/%m %H:%M')} − 400 🪙 (roupa nova 👕)")
-        if compra:
-            p["extrato"].append(f"{agora.strftime('%d/%m %H:%M')} 🎉 {compra}")
-            quem = LOJA.get("dono", DONO_PADRAO).get("nome", "O dono") if nome == dono_nome else nome
-            festas.append({"texto": f"{quem} {compra}", "ate": (agora + timedelta(hours=8)).timestamp() * 1000})
-        p["extrato"] = p["extrato"][-10:]
-    vida["ultima"] = (ult + timedelta(minutes=15 * passos)).isoformat()
-    vida["ultima_receita"] = agora.isoformat()
-    vida["festas"] = festas[-5:]
-    try:
-        gravar_json(ARQ_VIDA, vida)
-    except Exception:
-        pass
-    return vida
-
-
-def dados_cidade(publico: bool) -> dict:
-    """Junta tudo o que a mini fábrica mostra. Na loja (publico=True) não vai nome, endereço nem valores."""
-    agora = datetime.now()
-    ped = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
-    ped["total_num"] = pd.to_numeric(ped["total"], errors="coerce").fillna(0.0)
-    ped["dt"] = pd.to_datetime(ped["data"], format="%d/%m/%Y %H:%M", errors="coerce")
-    validos = ped[ped["status"] != "Cancelado"]
-    de_hoje = validos[validos["dt"].dt.date == agora.date()]
-    hist = ler_csv(ARQ_HIST, COL_HIST)
-    hist["dt"] = pd.to_datetime(hist["data"], format="%d/%m/%Y %H:%M", errors="coerce")
-    sem = hist[hist["dt"] >= agora - timedelta(days=7)]
-
-    def conta(status, n=0, i=None):
-        h = sem[sem["status"] == status]
-        if i is None or h.empty:
-            return int(len(h))
-        return int(sum(_dono(x, n) == i for x in h["id_pedido"]))
-
-    def cidade(p):
-        return f"{p['ent_cidade']}/{p['ent_uf']}" if str(p["ent_cidade"]).strip() else "cidade a confirmar"
-
-    def quem(p):
-        return "Cliente" if publico else (str(p["nome"]).strip() or "Cliente")
-
-    equipe = [m for m in carregar_equipe() if m.get("ativo", True)]
-    por_setor = {s: [m for m in equipe if m.get("setor") == s] for s in SETORES}
-    n_prod = len(por_setor["Produção"])
-
-    novos_df = ped[ped["status"] == "Novo"].sort_values("dt")
-    novos = [{"id": p["id_pedido"], "nome": quem(p), "total": "" if publico else brl(float(p["total_num"])),
-              "itens": _resumo(p), "espera": _espera(p["dt"], agora), "cidade": cidade(p),
-              "velho": bool(pd.notna(p["dt"]) and (agora - p["dt"]).total_seconds() > 86400)}
-             for _, p in novos_df.head(8).iterrows()]
-    prod_df = ped[ped["status"].isin(["Pago", "Em produção"])].sort_values("dt")
-    producao = []
-    for _, p in prod_df.head(12).iterrows():
-        itens = itens_do_pedido(p)
-        producao.append({"id": p["id_pedido"], "nome": quem(p), "itens": _resumo(p),
-                         "cats": [f"{i.get('categoria', '')} {i.get('nome', '')}" for i in itens[:3]] or [str(p["itens"])],
-                         "atrasado": _atrasado(p, agora), "quem": _dono(p["id_pedido"], n_prod),
-                         "espera": _espera(p["dt"], agora)})
-    env_df = ped[ped["status"] == "Enviado"].sort_values("dt")
-    entregas = []
-    for _, p in env_df.head(6).iterrows():
-        end = ", ".join(str(x) for x in [p["ent_rua"], p["ent_numero"], p["ent_complemento"], p["ent_bairro"]]
-                        if str(x).strip())
-        entregas.append({"id": p["id_pedido"], "nome": quem(p), "itens": _resumo(p), "cidade": cidade(p),
-                         "endereco": "" if publico else (end or p["endereco_entrega"] or "endereço não informado"),
-                         "cep": "" if publico else p["ent_cep"], "transportadora": p["transportadora"] or "a definir",
-                         "codigo": "" if publico else p["codigo_rastreio"], "atrasado": _atrasado(p, agora),
-                         "previsao": p["previsao_entrega"]})
-    sem_codigo = int(((ped["status"] == "Enviado") & (ped["codigo_rastreio"].astype(str).str.strip() == "")).sum())
-    atrasados = int(sum(_atrasado(p, agora) for _, p in validos.iterrows()))
-
-    an = analise_estoque(int(LOJA.get("estoque_margem_dias", 7)))
-    n_repor = int((an["repor"] == True).sum()) if len(an) else 0  # noqa: E712
-    estoque = []
-    for _, r in an.head(8).iterrows():
-        q, mn = float(r["quantidade"]), float(r["minimo"])
-        d = r["dias_restantes"]
-        estoque.append({"material": str(r["material"]), "qtd": f"{q:g}", "unidade": str(r["unidade"] or "un"),
-                        "minimo": f"{mn:g}", "repor": bool(r["repor"]) and not publico, "zerado": q <= 0,
-                        "dias": f"{d:.0f}" if pd.notna(d) else "", "comprar": f"{float(r['comprar']):g}",
-                        "nivel": round(0.0 if q <= 0 else (min(1.0, q / (mn * 3)) if mn > 0 else 1.0), 2),
-                        "fornecedor": "" if publico else str(r["fornecedor"])})
-    repor = [m for m in estoque if m["repor"]]
-
-    pendentes = int(len(validos[(validos["pagamento"] == "Pendente") & (validos["dt"] < agora - timedelta(days=2))]))
-    cli = ler_csv(ARQ_CLIENTES, COLUNAS_CLIENTES)
-    retornos = int(((cli["proximo_contato"] != "") & (cli["proximo_contato"] <= agora.strftime("%Y-%m-%d"))).sum())
-    mov = ler_csv(ARQ_MOVIMENTOS, COL_MOV)
-    movs_7d = int((pd.to_datetime(mov["data"], format="%Y-%m-%d %H:%M", errors="coerce")
-                   >= agora - timedelta(days=7)).sum())
-
-    vida_cidade = atualizar_vida([str(m.get("nome") or m.get("setor")) for m in equipe], validos, agora)
-    pessoas = []
-    for setor in SETORES:
-        membros = por_setor[setor]
-        n = len(membros)
-        for i, m in enumerate(membros):
-            estado, acao, fazendo, humor, motivo, rend, ids = "trabalhando", "", "", "feliz", "", "", []
-            if setor == "Diretoria":
-                acao = "lendo" if novos else ""
-                fazendo = (f"Analisando {len(novos_df)} pedido(s) para autorizar" if novos
-                           else "Acompanhando os números no painel da parede")
-                if atrasados:
-                    humor, motivo = "bravo", f"{atrasados} pedido(s) atrasado(s) na empresa"
-                elif any(p["velho"] for p in novos):
-                    humor, motivo = "estressado", "Tem pedido esperando autorização há mais de 1 dia"
-                elif novos:
-                    humor, motivo = "feliz", "Pedidos novos chegando!"
-                else:
-                    humor, motivo = ("feliz", "Dia com vendas") if len(de_hoje) else ("tranquilo", "Tudo em ordem")
-                rend = f"{conta('Em produção')} pedido(s) autorizados em 7 dias"
-                ids = [p["id"] for p in novos]
-            elif setor == "Atendimento":
-                meus = [p for p in novos if _dono(p["id"], n) == i]
-                tarefas = ([f"falando com {len(meus)} cliente(s) novo(s)"] if meus else []) + \
-                          ([f"cobrando {pendentes} pagamento(s) parado(s)"] if pendentes else []) + \
-                          ([f"{retornos} retorno(s) para hoje"] if retornos else [])
-                if tarefas or novos:
-                    acao = "digitando"
-                    fazendo = "No WhatsApp: " + ("; ".join(tarefas) or "acompanhando os pedidos novos")
-                    if pendentes >= 3:
-                        humor, motivo = "bravo", f"Cliente não responde: {pendentes} pagamento(s) parado(s) há mais de 2 dias"
-                    elif pendentes:
-                        humor, motivo = "estressado", "Esperando cliente responder sobre o pagamento"
-                    else:
-                        humor, motivo = "feliz", "Conversando com clientes"
-                else:
-                    estado, fazendo, humor, motivo = "pausa", "Sem mensagens agora, tomando um café", "tranquilo", "Mensagens em dia"
-                criados = validos[validos["dt"] >= agora - timedelta(days=7)]
-                rend = f"{sum(_dono(x, n) == i for x in criados['id_pedido'])} pedido(s) atendidos em 7 dias"
-                ids = [p["id"] for p in meus]
-            elif setor == "Produção":
-                meus = [p for p in producao if p["quem"] == i]
-                if meus:
-                    acao, p0 = "trabalho", meus[0]
-                    fazendo = f"Produzindo {p0['id']}: {p0['itens']}" + (f" (+{len(meus) - 1} na fila)" if len(meus) > 1 else "")
-                    atr = sum(p["atrasado"] for p in meus)
-                    if atr >= 2:
-                        humor, motivo = "bravo", f"{atr} pedidos atrasados na bancada"
-                    elif atr:
-                        humor, motivo = "estressado", "Tem pedido atrasado"
-                    elif len(meus) >= 4:
-                        humor, motivo = "estressado", f"{len(meus)} pedidos na fila"
-                    else:
-                        humor, motivo = "feliz", "Produzindo no ritmo certo"
-                else:
-                    estado, fazendo, humor, motivo = ("pausa", "Sem pedido na produção, foi tomar um café", "tranquilo",
-                                                      "Esperando o diretor autorizar pedidos")
-                rend = f"{conta('Enviado', n, i)} pedido(s) finalizados em 7 dias"
-                ids = [p["id"] for p in meus]
-            elif setor == "Estoque":
-                zerados = [x["material"] for x in estoque if x["zerado"]]
-                if repor:
-                    acao = "carregando"
-                    fazendo = "Conferindo o que falta: " + ", ".join(x["material"] for x in repor[:3])
-                    humor, motivo = (("bravo", "Acabou: " + ", ".join(zerados[:3])) if zerados
-                                     else ("estressado", f"{n_repor} material(is) para repor"))
-                elif producao:
-                    acao, fazendo, humor, motivo = ("carregando", f"Separando material para {len(prod_df)} pedido(s)",
-                                                    "feliz", "Estoque em dia")
-                elif not estoque:
-                    estado, fazendo, humor, motivo = "pausa", "Esperando o cadastro dos materiais", "tranquilo", "Nenhum material cadastrado"
-                else:
-                    estado, fazendo, humor, motivo = "pausa", "Estoque em dia, pausa para o café", "tranquilo", "Nada para repor"
-                rend = f"{movs_7d} movimentação(ões) no estoque em 7 dias"
-            elif setor == "Expedição":
-                if producao or sem_codigo:
-                    acao = "trabalho"
-                    fazendo = "Embalando pedidos" + (f"; {sem_codigo} enviado(s) sem código de rastreio" if sem_codigo else "")
-                    humor, motivo = (("estressado", "Tem pedido enviado sem código de rastreio") if sem_codigo
-                                     else ("feliz", "Caixas saindo"))
-                else:
-                    estado, fazendo, humor, motivo = "pausa", "Nada para embalar agora", "tranquilo", "Esperando a produção"
-                rend = f"{conta('Enviado')} pacote(s) despachados em 7 dias"
-            else:
-                if entregas:
-                    estado, e0 = "dirigindo", entregas[0]
-                    fazendo = f"Na van, levando {e0['id']} para {e0['cidade']}" + (
-                        f" (+{len(env_df) - 1} entrega(s))" if len(env_df) > 1 else "")
-                    atr = sum(e["atrasado"] for e in entregas)
-                    humor, motivo = (("estressado", f"{atr} entrega(s) atrasada(s)") if atr else
-                                     ("estressado", "Muitas entregas hoje") if len(env_df) > 4 else ("feliz", "Pé na estrada"))
-                    ids = [e["id"] for e in entregas]
-                else:
-                    estado, fazendo, humor, motivo = "pausa", "Van na garagem, esperando entregas", "tranquilo", "Nenhum pedido a caminho"
-                rend = f"{conta('Entregue')} entrega(s) concluídas em 7 dias"
-            if publico:  # o cliente vê a equipe sempre de bem e sem dados internos
-                humor, motivo, rend = ("feliz" if estado != "pausa" else "tranquilo"), "", ""
-                fazendo = {"Diretoria": "Conferindo os pedidos", "Atendimento": "Respondendo clientes",
-                           "Estoque": "Organizando o estoque"}.get(setor, fazendo) if estado != "pausa" else "Pausa para o café ☕"
-            nome_m = str(m.get("nome") or setor)
-            v = vida_cidade["pessoas"].get(nome_m, {})
-            if not publico and v.get("dinheiro", 9999) < 150 and humor in ("feliz", "tranquilo"):
-                humor, motivo = "triste", "Dinheiro curto até o próximo salário 😟"
-            pessoas.append({"key": f"{nome_m}|{setor}", "nome": nome_m, "cargo": str(m.get("cargo") or setor), "setor": setor,
-                            "vida": None if publico else {"dinheiro": round(float(v.get("dinheiro", 0))), "transporte": int(v.get("transporte", 0)),
-                                                          "casa": int(v.get("casa", 0)), "roupa": int(v.get("roupa", 0)),
-                                                          "extrato": v.get("extrato", [])[-6:]},
-                            "pele": TONS_PELE.get(m.get("pele"), "#E0AC88"),
-                            "cabelo": CORES_CABELO.get(m.get("cabelo"), "#1a1a1a"),
-                            "estilo": m.get("estilo") if m.get("estilo") in ESTILOS_CABELO else "Curto",
-                            "camisa": _cor_ok(m.get("camisa"), "#2563eb"), "estado": estado, "acao": acao,
-                            "fazendo": fazendo, "humor": humor, "motivo": motivo, "rendimento": rend, "ids": ids})
-
-    dias = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
-    semana = []
-    for k in range(6, -1, -1):
-        d = (agora - timedelta(days=k)).date()
-        semana.append({"dia": dias[d.weekday()], "qtd": int((validos["dt"].dt.date == d).sum())})
-    eventos = [f"{h['dt'].strftime('%d/%m %H:%M')} · {h['id_pedido']} → {h['status']}"
-               for _, h in hist.dropna(subset=["dt"]).sort_values("dt").tail(8).iloc[::-1].iterrows()]
-    return {"publico": publico, "empresa": LOJA["nome_empresa"], "cor": _cor_ok(COR, "#1d4ed8"),
-            "numeros": {"hoje": int(len(de_hoje)), "fat": "" if publico else brl(float(de_hoje["total_num"].sum())),
-                        "producao": int(len(prod_df)), "caminho": int(len(env_df)), "entregues": conta("Entregue"),
-                        "novos": int(len(novos_df)), "repor": 0 if publico else n_repor,
-                        "atrasados": 0 if publico else atrasados, "pendentes": 0 if publico else pendentes,
-                        "retornos": 0 if publico else retornos, "sem_codigo": 0 if publico else sem_codigo},
-            "semana": semana, "novos": novos, "producao": producao, "entregas": entregas, "estoque": estoque,
-            "equipe": pessoas, "eventos": eventos, "expediente": _exp_js(), "zonas": _zonas_estoque(an, publico),
-            "festas": [] if publico else vida_cidade.get("festas", []), "dono": _dono_cidade(publico, vida_cidade)}
-
-
-def _exp_js() -> dict:
-    """Expediente no formato do navegador (domingo = 0)."""
-    e = expediente()
-    return dict(e, dias=[(d + 1) % 7 for d in e["dias"]])
-
-
-def _zonas_estoque(an: pd.DataFrame, publico: bool) -> list:
-    """Uma área do estoque para cada categoria de produto, com os materiais ligados a ela."""
-    zonas = []
-    for cat in list(CATALOGO.keys())[:6]:
-        base = cat.lower().rstrip("s")[:5]
-        mats = []
-        for _, r in an.iterrows():
-            texto = f"{r['usado_em']} {r['categoria']} {r['material']}".lower()
-            if base and base in texto:
-                q, mn = float(r["quantidade"]), float(r["minimo"])
-                mats.append({"material": str(r["material"]), "qtd": f"{q:g}", "unidade": str(r["unidade"] or "un"),
-                             "repor": bool(r["repor"]) and not publico, "comprar": f"{float(r['comprar']):g}",
-                             "nivel": 0.0 if q <= 0 else (min(1.0, q / (mn * 3)) if mn > 0 else 1.0)})
-        nivel = sum(m["nivel"] for m in mats) / len(mats) if mats else 0.6
-        zonas.append({"nome": cat, "nivel": round(nivel, 2), "repor": any(m["repor"] for m in mats), "materiais": mats})
-    return zonas
-
-
-def _dono_cidade(publico: bool, vida_cidade: dict) -> dict:
-    """O seu boneco: aparece trabalhando no lugar da tela do painel que você está usando."""
-    cfg = dict(DONO_PADRAO, **LOJA.get("dono", {}))
-    v = vida_cidade["pessoas"].get("__dono__", {})
-    cat = st.session_state.get("filtro_cat_admin", "")
-    return {"nome": "Dono" if publico else cfg["nome"], "pele": TONS_PELE.get(cfg["pele"], "#E0AC88"),
-            "cabelo": CORES_CABELO.get(cfg["cabelo"], "#5a3214"),
-            "estilo": cfg["estilo"] if cfg["estilo"] in ESTILOS_CABELO else "Curto",
-            "camisa": _cor_ok(cfg["camisa"], "#7c3aed"), "humor": "feliz",
-            "ativo": (not publico) and bool(st.session_state.get("admin")),
-            "secao": "" if publico else st.session_state.get("secao_admin", ""),
-            "categoria": "" if (publico or cat == "Todas") else cat,
-            "vida": None if publico else {"dinheiro": round(float(v.get("dinheiro", 0))), "transporte": int(v.get("transporte", 0)),
-                                          "casa": int(v.get("casa", 0)), "roupa": int(v.get("roupa", 0)),
-                                          "extrato": v.get("extrato", [])[-6:]}}
-
-
-def botoes_ocultos_cidade(d: dict):
-    """Botões invisíveis: a mini fábrica aperta eles quando você clica em Autorizar, Enviar, Entregue..."""
-    acao = None
-    with st.container(key="mc_ocultos"):
-        for p in d["novos"]:
-            if st.button("Autorizar", key=f"mc_apr_{p['id']}"):
-                acao = (p["id"], "Em produção")
-            if st.button("Recusar", key=f"mc_rec_{p['id']}"):
-                acao = (p["id"], "Cancelado")
-        for p in d["producao"]:
-            if st.button("Enviar", key=f"mc_env_{p['id']}"):
-                acao = (p["id"], "Enviado")
-        for p in d["entregas"]:
-            if st.button("Entregue", key=f"mc_ent_{p['id']}"):
-                acao = (p["id"], "Entregue")
-        for chave, secao in NAV_CIDADE.items():
-            if st.button(secao, key=f"mc_nav_{chave}"):
-                acao = ("nav", secao)
-    if acao:
-        if acao[0] == "nav":
-            st.session_state.secao_admin = acao[1]
-        else:
-            mudar_status(*acao)
-        st.rerun(scope="app")
-
-
-def _js(v) -> str:
-    return json.dumps(v, ensure_ascii=False).replace("</", "<\\/")
-
-
-def _injetor_cidade(d, modo: str) -> str:
-    """Manda os dados para a cidade 3D. modo: 'flutuante' (janela que se arrasta) ou 'esconder'."""
-    janela = (f"P.__mcJanela({_js(MOTOR_CIDADE)},'{VERSAO_MOTOR}');" if modo == "flutuante" else "P.__mcEsconder();")
-    return ("<script>(function(){try{var P=window.parent;"
-            f"if(!P.__mcJanela||P.__mcVersao!=='{VERSAO_MOTOR}'){{var s=P.document.createElement('script');"
-            "s.textContent=" + _js(CODIGO_JANELA) + ";P.document.head.appendChild(s);}"
-            f"var d={_js(d)};P.__mcDados=d;P.__mcAvisar(d);" + janela +
-            "(P.__mcFrames||[]).forEach(function(w){try{w.mcAtualizar(d);}catch(e){}});"
-            "}catch(e){console.log('mini cidade',e);}})();</script>")
-
-
-@st.fragment(run_every=15)
-def mini_cidade(local: str):
-    """local: 'painel' (grande, na seção Empresa ao vivo), 'admin' (janela flutuante do painel)
-    ou 'loja' (janela flutuante para o cliente, sem dados pessoais). Atualiza sozinha a cada 15 s."""
-    d = dados_cidade(publico=(local == "loja"))
-    if local != "loja":
-        botoes_ocultos_cidade(d)
-    with st.container(key="mc_host"):
-        components.html(_injetor_cidade(d, "esconder" if local == "painel" else "flutuante"), height=0)
-
-
-def esconder_cidade():
-    with st.container(key="mc_host"):
-        components.html("<script>try{window.parent.__mcEsconder&&window.parent.__mcEsconder();}catch(e){}</script>",
-                        height=0)
-
-
-# Janela flutuante (roda na própria página): arrastar, mudar tamanho e minimizar
-CODIGO_JANELA = r"""
-(function(){
-var W=window, D=document; W.__mcVersao='VERSAO';
-var TAM=[420,640,960,99999], cfg={};
-try{cfg=JSON.parse(W.localStorage.getItem('mcJanela3d')||'{}')||{};}catch(e){cfg={};}
-function salvar(){try{W.localStorage.setItem('mcJanela3d',JSON.stringify(cfg));}catch(e){}}
-function el(){return D.getElementById('mc-janela');}
-function aplicar(){
-  var w=el(); if(!w) return;
-  var corpo=w.querySelector('#mc-corpo'), fr=w.querySelector('#mc-frame'), t=(cfg.t===undefined?1:cfg.t);
-  var larg=Math.max(280,Math.min(TAM[t],W.innerWidth-16)), alt=Math.min(Math.round(larg*0.62),W.innerHeight-60);
-  w.style.width=(cfg.min?250:larg)+'px'; corpo.style.display=cfg.min?'none':'block'; fr.style.height=alt+'px';
-  var ww=w.offsetWidth, hh=w.offsetHeight;
-  var x=(typeof cfg.x==='number')?cfg.x:W.innerWidth-ww-16, y=(typeof cfg.y==='number')?cfg.y:W.innerHeight-hh-16;
-  x=Math.max(4,Math.min(x,W.innerWidth-ww-4)); y=Math.max(4,Math.min(y,W.innerHeight-36));
-  w.style.left=x+'px'; w.style.top=y+'px';
-}
-function criar(){
-  var w=D.createElement('div'); w.id='mc-janela';
-  w.style.cssText='position:fixed;z-index:1000001;background:#fff;border-radius:14px;box-shadow:0 14px 36px rgba(15,23,42,.35);overflow:hidden;border:1px solid #cbd5e1;font-family:Segoe UI,Arial,sans-serif;';
-  var bt='background:rgba(255,255,255,.22);border:0;color:#fff;border-radius:7px;cursor:pointer;font-size:13px;width:28px;height:24px;line-height:22px;padding:0;';
-  w.innerHTML='<div id="mc-cab" style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:linear-gradient(90deg,#7c3aed,#06b6d4);color:#fff;cursor:move;user-select:none;touch-action:none;">'
-   +'<span style="flex:1;font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;color:#fff;">🏙️ Cidade ao vivo <small style="opacity:.85;font-weight:400;color:#fff;">· arraste aqui para mover</small></span>'
-   +'<button data-a="tam" title="Aumentar (pequena, média, grande, tela cheia)" style="'+bt+'">⤢</button><button data-a="min" title="Minimizar / abrir" style="'+bt+'">–</button></div>'
-   +'<div id="mc-corpo"><iframe id="mc-frame" title="Cidade ao vivo" style="width:100%;border:0;display:block;background:#bfdcf5;"></iframe></div>';
-  D.body.appendChild(w);
-  var cab=w.querySelector('#mc-cab'), fr=w.querySelector('#mc-frame'), arr=null;
-  cab.addEventListener('click',function(e){var b=e.target.closest('button'); if(!b) return; var a=b.getAttribute('data-a');
-    if(a==='tam'){cfg.t=((cfg.t===undefined?1:cfg.t)+1)%4; cfg.min=false; if(cfg.t===3){cfg.x=8;cfg.y=8;}} if(a==='min'){cfg.min=!cfg.min;} salvar(); aplicar();});
-  cab.addEventListener('pointerdown',function(e){ if(e.target.closest('button')) return;
-    arr={dx:e.clientX-w.offsetLeft, dy:e.clientY-w.offsetTop}; try{cab.setPointerCapture(e.pointerId);}catch(_){}
-    fr.style.pointerEvents='none'; e.preventDefault();});
-  cab.addEventListener('pointermove',function(e){ if(!arr) return; cfg.x=e.clientX-arr.dx; cfg.y=e.clientY-arr.dy; aplicar();});
-  function soltar(){ if(!arr) return; arr=null; fr.style.pointerEvents=''; salvar(); }
-  cab.addEventListener('pointerup',soltar); cab.addEventListener('pointercancel',soltar);
-  return w;
-}
-W.addEventListener('resize',aplicar);
-W.__mcJanela=function(motor,versao){
-  var w=el()||criar(); w.style.display=''; var fr=w.querySelector('#mc-frame');
-  if(fr.getAttribute('data-v')!==versao){ fr.setAttribute('data-v',versao); fr.srcdoc=motor; }
-  aplicar();
-};
-W.__mcEsconder=function(){var w=el(); if(w) w.style.display='none';};
-// ---- Alerta de pedido novo: campainha + aviso na tela ----
-function campainha(){ try{ var A=W.AudioContext||W.webkitAudioContext; if(!A) return; var c=W.__mcAudio||(W.__mcAudio=new A());
-  if(c.state==='suspended') c.resume(); [[880,0],[1320,.18],[1760,.36]].forEach(function(n){var o=c.createOscillator(), g=c.createGain();
-  o.type='sine'; o.frequency.value=n[0]; g.gain.setValueAtTime(.0001,c.currentTime+n[1]); g.gain.exponentialRampToValueAtTime(.35,c.currentTime+n[1]+.02);
-  g.gain.exponentialRampToValueAtTime(.0001,c.currentTime+n[1]+.5); o.connect(g); g.connect(c.destination); o.start(c.currentTime+n[1]); o.stop(c.currentTime+n[1]+.55);}); }catch(e){} }
-function aviso(txt){ var a=D.createElement('div');
-  a.style.cssText='position:fixed;top:16px;right:16px;z-index:1000002;background:linear-gradient(90deg,#16a34a,#0ea5e9);color:#fff;padding:12px 16px;border-radius:12px;font:600 14px Segoe UI,Arial;box-shadow:0 10px 26px rgba(0,0,0,.3);cursor:pointer;max-width:340px';
-  a.innerHTML=txt+'<div style="font-weight:400;font-size:12px;opacity:.9;margin-top:3px">Clique para abrir os pedidos</div>';
-  a.onclick=function(){var b=D.querySelector('.st-key-mc_nav_pedidos button'); if(b) b.click(); a.remove();};
-  D.body.appendChild(a); setTimeout(function(){a.remove();},12000); }
-W.__mcAvisar=function(d){ if(!d||d.publico) return; var ids=(d.novos||[]).map(function(x){return x.id;});
-  if(W.__mcVistos){ var novos=(d.novos||[]).filter(function(x){return W.__mcVistos.indexOf(x.id)<0;});
-    if(novos.length){ campainha(); aviso('🔔 Pedido novo! '+novos.map(function(x){return x.id+' · '+x.nome;}).join('<br>'));
-      var t0=D.title; D.title='🔔 Pedido novo!'; setTimeout(function(){D.title=t0;},8000); } }
-  W.__mcVistos=(W.__mcVistos||[]).concat(ids).slice(-200); };
-})();
-""".replace("VERSAO", VERSAO_MOTOR)
-
-# Desenho animado da fábrica (prédio, salas, bonequinhos, esteira, van e casas dos clientes)
-MOTOR_CIDADE = r"""<!DOCTYPE html><html><head><meta charset="utf-8">
-<style>
-html,body{margin:0;padding:0;background:#bfdcf5;font-family:'Segoe UI',Arial,sans-serif;overflow:hidden}
-#mc{position:relative;width:100vw;height:100vh;overflow:hidden}
-#mc canvas{display:block}
-.rotulos{position:absolute;top:0;left:0;pointer-events:none}
-.nome{font-size:11px;font-weight:700;color:#0f172a;background:rgba(255,255,255,.88);padding:1px 6px;border-radius:999px;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.2)}
-.msg{font-size:10px;color:#1e1b4b;text-decoration:underline;text-decoration-color:#a78bfa;white-space:nowrap;max-width:240px;overflow:hidden;text-overflow:ellipsis;text-shadow:0 0 3px #fff,0 0 3px #fff;transition:opacity .4s}
-.placa{font-size:11px;font-weight:800;color:#fff;background:rgba(15,23,42,.78);padding:2px 8px;border-radius:6px;white-space:nowrap}
-.placa.alerta{background:#dc2626}
-.casa-rot{font-size:10px;color:#fff;background:rgba(220,38,38,.9);padding:2px 7px;border-radius:6px;white-space:nowrap;text-align:center;line-height:1.25}
-.sem-nomes .nome,.sem-nomes .msg{display:none}
-#barra{position:absolute;left:8px;top:8px;display:flex;gap:5px;flex-wrap:wrap;z-index:4}
-#barra button{border:0;background:rgba(255,255,255,.92);color:#312e81;font-weight:700;font-size:12px;padding:5px 9px;border-radius:9px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.18)}
-#barra button:hover{background:#ede9fe}
-#hora{position:absolute;right:8px;top:8px;z-index:4;background:rgba(15,23,42,.8);color:#fff;font-size:12px;padding:5px 10px;border-radius:9px;font-weight:600}
-#carregando{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;color:#1e3a8a;font-weight:700;background:#dbeafe;z-index:9;text-align:center;padding:20px}
-#pop{position:absolute;display:none;left:50%;top:50%;transform:translate(-50%,-50%);width:min(94%,420px);max-height:90%;overflow:auto;background:#fff;border-radius:14px;box-shadow:0 14px 36px rgba(0,0,0,.35);border:1px solid #e5e7eb;font-size:13px;color:#1f2937;z-index:6}
-#pop .cab{display:flex;align-items:center;gap:8px;padding:9px 12px;background:linear-gradient(90deg,#7c3aed,#06b6d4);color:#fff;position:sticky;top:0}
-#pop .cab b{flex:1;font-size:14px}
-#pop .x{background:rgba(255,255,255,.25);border:0;color:#fff;border-radius:8px;cursor:pointer;padding:2px 9px;font-size:14px}
-#pop .corpo{padding:8px 12px 12px}
-#pop .lin{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px dashed #e5e7eb}
-#pop .lin b{text-align:right}
-#pop h4{margin:10px 0 2px;font-size:13px;color:#5b21b6}
-#pop .ped{background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:7px 9px;margin:6px 0;line-height:1.35}
-#pop .acoes{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
-#pop button.ac{border:1.5px solid #8b5cf6;background:#fff;color:#5b21b6;border-radius:8px;padding:4px 10px;font-weight:700;cursor:pointer;font-size:12px}
-#pop button.ac.pri{background:linear-gradient(90deg,#7c3aed,#06b6d4);color:#fff;border:0}
-#pop .humor{display:inline-block;padding:1px 8px;border-radius:999px;font-weight:700;font-size:12px}
-#pop .motivo{font-size:12px;color:#6b7280;margin:5px 0}
-#pop .vazio{color:#6b7280;font-size:12px}
-#pop .ev{font-size:12px;padding:4px 6px;border-radius:8px;margin:3px 0;background:#f8fafc}
-#pop .ev.clicavel{cursor:pointer}
-#pop .ev.clicavel:hover{background:#ede9fe}
-#pop .tela{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:10px;font-family:Consolas,monospace;font-size:12px;line-height:1.5;border:6px solid #334155}
-#aviso{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);background:#111827;color:#fff;padding:6px 14px;border-radius:999px;font-size:12px;display:none;z-index:7;white-space:nowrap}
-#festa{position:absolute;left:50%;top:44px;transform:translateX(-50%);background:linear-gradient(90deg,#f59e0b,#ec4899);color:#fff;padding:5px 14px;border-radius:999px;font-size:12px;font-weight:700;display:none;z-index:4;white-space:nowrap}
-</style>
-<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
-</head><body>
-<div id="mc">
- <div id="carregando">🏙️ Montando a cidade 3D…<small style="font-weight:400">Precisa de internet para carregar o motor 3D na primeira vez.</small></div>
- <div id="barra">
-  <button data-cam="fabrica" title="Ver a fábrica de perto">🏭 Fábrica</button>
-  <button data-cam="cidade" title="Ver a cidade inteira">🏙️ Cidade</button>
-  <button data-cam="dono" title="Seguir o meu boneco">👤 Eu</button>
-  <button data-cam="caminhao" title="Seguir o caminhão">🚚 Caminhão</button>
-  <button data-cam="nomes" title="Mostrar ou esconder nomes e conversas">🏷️ Nomes</button>
- </div>
- <div id="hora">--:--</div><div id="festa"></div><div id="pop"></div><div id="aviso"></div>
-</div>
-<script>
-setTimeout(function(){var c=document.getElementById('carregando'); if(c&&!window.__mc3d) c.innerHTML='😕 Não consegui carregar o motor 3D.<small style="font-weight:400">Confira a internet e recarregue a página.</small>';},15000);
-</script>
-<script type="module">
-import * as THREE from 'three';
-import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
-import {CSS2DRenderer, CSS2DObject} from 'three/addons/renderers/CSS2DRenderer.js';
-window.__mc3d=true;
-
-// ================================================================ BASE
-const cont=document.getElementById('mc'), popEl=document.getElementById('pop'), avisoEl=document.getElementById('aviso');
-const renderer=new THREE.WebGLRenderer({antialias:true});
-renderer.setPixelRatio(Math.min(2,window.devicePixelRatio||1));
-renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.PCFSoftShadowMap;
-cont.appendChild(renderer.domElement);
-const rot=new CSS2DRenderer(); rot.domElement.className='rotulos'; cont.appendChild(rot.domElement);
-const scene=new THREE.Scene();
-const cam=new THREE.PerspectiveCamera(42,1,.1,600);
-cam.position.set(10,20,40);
-const ctl=new OrbitControls(cam,renderer.domElement);
-ctl.target.set(0,5,-5); ctl.enableDamping=true; ctl.maxPolarAngle=Math.PI*.47; ctl.minDistance=5; ctl.maxDistance=170;
-scene.fog=new THREE.Fog(0xbfdcf5,110,240);
-const hemi=new THREE.HemisphereLight(0xe0f2fe,0x52613f,.9); scene.add(hemi);
-const sol=new THREE.DirectionalLight(0xffffff,1.5); sol.position.set(45,70,35); sol.castShadow=true;
-sol.shadow.mapSize.set(2048,2048); Object.assign(sol.shadow.camera,{left:-80,right:80,top:80,bottom:-80,far:220}); scene.add(sol);
-function tamanho(){var w=cont.clientWidth||400,h=cont.clientHeight||300; renderer.setSize(w,h); rot.setSize(w,h); cam.aspect=w/h; cam.updateProjectionMatrix();}
-window.addEventListener('resize',tamanho); tamanho();
-
-const MATS={};
-function M(c,o){var k=c+JSON.stringify(o||{}); if(!MATS[k]) MATS[k]=new THREE.MeshStandardMaterial(Object.assign({color:c,roughness:.75,metalness:.05},o||{})); return MATS[k];}
-function caixa(w,h,d,cor,x,y,z,pai,o){var m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),typeof cor==='string'?M(cor,o):cor); m.position.set(x,y+h/2,z); m.castShadow=true; m.receiveShadow=true; (pai||scene).add(m); return m;}
-function cil(rt,rb,h,cor,x,y,z,pai,seg){var m=new THREE.Mesh(new THREE.CylinderGeometry(rt,rb,h,seg||16),typeof cor==='string'?M(cor):cor); m.position.set(x,y+h/2,z); m.castShadow=true; m.receiveShadow=true; (pai||scene).add(m); return m;}
-function marcar(obj,k,v){obj.userData.k=k; obj.userData.v=v; return obj;}
-function rotulo(html,cls,pai,y){var d=document.createElement('div'); d.className=cls; d.innerHTML=html; var o=new CSS2DObject(d); o.position.y=y||0; pai.add(o); return o;}
-function textura(w,h,desenho){var c=document.createElement('canvas'); c.width=w; c.height=h; var x=c.getContext('2d'); var t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; var r={c:c,x:x,t:t,des:desenho}; r.atualizar=function(a){desenho(x,w,h,a); t.needsUpdate=true;}; return r;}
-function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
-function corta(s,n){s=String(s||'');return s.length>n?s.slice(0,n-1)+'…':s;}
-function hashTxt(s){var h=0;s=String(s);for(var i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))|0;return Math.abs(h);}
-function moedas(v){return '🪙 '+Math.round(v||0).toLocaleString('pt-BR');}
-function cor(c,p){return /^#[0-9a-fA-F]{3,8}$/.test(c||'')?c:p;}
-var D=null, pessoas={}, popAberto=null, primeira=true, mostrarNomes=true, camModo='livre';
-
-// ================================================================ CIDADE (chão, avenida, árvores, postes)
-caixa(180,.2,140,'#7fb069',0,-.2,4);
-caixa(180,.05,8,'#374151',0,0,7);
-for(var x=-88;x<90;x+=6) caixa(2.6,.02,.18,'#f8fafc',x,.05,7);
-caixa(180,.16,3,'#cbd5e1',0,0,1.5); caixa(180,.16,3,'#cbd5e1',0,0,12.5);
-[-20,22,-62,62].forEach(function(x){ for(var z=3.4;z<10.8;z+=1.1) caixa(.7,.02,.5,'#f8fafc',x,.05,z+.2); });
-var POSTES=[];
-for(var px=-84;px<=84;px+=14){ [2.8,11.2].forEach(function(pz){ if(px>-18&&px<20&&pz<5) return;
-  cil(.08,.1,4.2,'#475569',px,0,pz); var lamp=new THREE.Mesh(new THREE.SphereGeometry(.28,10,8),new THREE.MeshStandardMaterial({color:'#fef9c3',emissive:'#fde68a',emissiveIntensity:0}));
-  lamp.position.set(px,4.3,pz); scene.add(lamp); POSTES.push(lamp); }); }
-function arvore(x,z,s){s=s||1; cil(.15*s,.2*s,1.6*s,'#78350f',x,0,z); var c=new THREE.Mesh(new THREE.IcosahedronGeometry(1.2*s,0),M('#2f855a',{flatShading:true})); c.position.set(x,2.2*s,z); c.castShadow=true; scene.add(c);}
-[-66,-58,-46,-28,24,62,72,80].forEach(function(x,i){arvore(x,-12-(i%2)*3,1+(i%3)*.15);});
-[-26,26,-70,70,80,-80].forEach(function(x){arvore(x,13.4,.8);});
-
-// ================================================================ FÁBRICA (prédio em corte, 3 andares)
-var AND=4, PAREDE='#e2e8f0';
-function yA(f){return f*AND+.16;}
-for(var f=0;f<=3;f++) caixa(32.4,.3,10.4,'#94a3b8',0,f*AND-.15,-5);
-caixa(32.4,12.4,.3,'#cbd5e1',0,0,-10.3);
-caixa(.3,12.4,10.4,'#cbd5e1',-16.3,0,-5);
-caixa(.3,12.4,5.6,'#cbd5e1',16.3,0,-7.4);
-var vidro=new THREE.MeshStandardMaterial({color:'#bae6fd',transparent:true,opacity:.28,roughness:.1,metalness:.2});
-caixa(2.8,12.6,2.8,vidro,17.7,0,-3);
-caixa(3,.2,3,'#64748b',17.7,12.6,-3);
-var placaLoja=textura(1024,160,function(x,w,h,a){x.fillStyle=(D&&cor(D.cor,'#1d4ed8'))||'#1d4ed8'; x.fillRect(0,0,w,h); x.fillStyle='#fff'; x.font='bold 78px Segoe UI, Arial'; x.textAlign='center'; x.textBaseline='middle'; x.fillText('🏷️ '+corta((D&&D.empresa)||'Minha Empresa',26),w/2,h/2);});
-var placaM=new THREE.Mesh(new THREE.BoxGeometry(22,2.4,.3),[M('#334155'),M('#334155'),M('#334155'),M('#334155'),new THREE.MeshBasicMaterial({map:placaLoja.t}),M('#334155')]);
-placaM.position.set(0,13.6,-6); scene.add(placaM); placaLoja.atualizar();
-
-var SALAS=[
- {id:'Diretoria',f:2,x0:-16,x1:-2,cor:'#e8eef7',rot:'🏢 Diretoria',nav:'resumo'},
- {id:'Atendimento',f:2,x0:-2,x1:16,cor:'#fce7f3',rot:'💬 Atendimento',nav:'clientes'},
- {id:'Produção',f:1,x0:-16,x1:4,cor:'#d1fae5',rot:'🔥 Produção',nav:'artes'},
- {id:'Estúdio',f:1,x0:4,x1:10,cor:'#ede9fe',rot:'🎨 Estúdio de criação',nav:'artes'},
- {id:'Cafeteria',f:1,x0:10,x1:16,cor:'#fef3c7',rot:'☕ Cafeteria',nav:''},
- {id:'Estoque',f:0,x0:-16,x1:-2,cor:'#ffedd5',rot:'📦 Estoque',nav:'estoque'},
- {id:'Expedição',f:0,x0:-2,x1:8,cor:'#dbeafe',rot:'🏷️ Expedição',nav:'etiquetas'},
- {id:'Garagem',f:0,x0:8,x1:16,cor:'#e5e7eb',rot:'🚚 Garagem',nav:'rastreio'}];
-SALAS.forEach(function(s){
-  var cx=(s.x0+s.x1)/2, w=s.x1-s.x0, y=s.f*AND;
-  marcar(caixa(w-.1,.04,10,s.cor,cx,y+.01,-5),'sala',s.id);
-  caixa(w-.1,3.7,.06,s.cor,cx,y+.15,-10.1);
-  if(s.x0>-16) caixa(.18,3.7,4,PAREDE,s.x0,y+.15,-8);
-  var painel=new THREE.Mesh(new THREE.BoxGeometry(Math.min(4,w*.5),.06,1.2),new THREE.MeshStandardMaterial({color:'#fff',emissive:'#fff7d6',emissiveIntensity:.2}));
-  painel.position.set(cx,y+AND-.25,-5); scene.add(painel);
-  var luz=new THREE.PointLight(0xfff1cc,0,16,1.6); luz.position.set(cx,y+AND-.7,-4.5); scene.add(luz);
-  s.painel=painel; s.luz=luz; s.cx=cx;
-  var a=new THREE.Object3D(); a.position.set(s.x0+1.4,y+3.3,-9.9); scene.add(a); rotulo(s.rot,'placa',a);
-});
-function salaDe(p){ var f=Math.round((p.y-.16)/AND); if(p.z<-10.4||p.z>.4||p.x<-16.2||p.x>16.2||f<0||f>2) return null;
-  for(var i=0;i<SALAS.length;i++){var s=SALAS[i]; if(s.f===f&&p.x>=s.x0&&p.x<s.x1) return s;} return null; }
-
-// ---------- móveis ----------
-function cadeira(x,y,z){var g=new THREE.Group(); caixa(.55,.08,.55,'#1f2937',0,.45,0,g); caixa(.55,.6,.08,'#1f2937',0,.5,-.26,g); cil(.04,.04,.45,'#475569',0,0,0,g); g.position.set(x,y,z); scene.add(g); return g;}
-var NOTES=[];
-function mesa(x,f,z,corTampo,dono){
-  var y=yA(f), g=new THREE.Group(); g.position.set(x,y,z); scene.add(g);
-  caixa(1.9,.07,.9,corTampo||'#a16207',0,.74,0,g);
-  [[-.85,-.38],[.85,-.38],[-.85,.38],[.85,.38]].forEach(function(p){caixa(.06,.74,.06,'#334155',p[0],0,p[1],g);});
-  caixa(1.8,.5,.04,corTampo||'#a16207',0,.24,.42,g);
-  var tela=textura(256,160,function(c,w,h,a){c.fillStyle='#0f172a';c.fillRect(0,0,w,h);c.fillStyle='#22d3ee';c.font='bold 18px Consolas';c.fillText((a&&a.t1)||'',10,28);c.fillStyle='#e2e8f0';c.font='14px Consolas';var linhas=((a&&a.t2)||'').match(/.{1,30}/g)||[];linhas.slice(0,6).forEach(function(l,i){c.fillText(l,10,54+i*18);});});
-  tela.atualizar({t1:'💤 desligado',t2:''});
-  caixa(.6,.03,.42,'#cbd5e1',0,.78,-.1,g);
-  var scr=new THREE.Mesh(new THREE.BoxGeometry(.6,.4,.03),[M('#94a3b8'),M('#94a3b8'),M('#94a3b8'),M('#94a3b8'),M('#94a3b8'),new THREE.MeshBasicMaterial({map:tela.t})]);
-  scr.position.set(0,1.0,.1); scr.rotation.x=-.25; scr.rotation.y=Math.PI; g.add(scr); scr.castShadow=true;
-  cadeira(x,y,z-.85);
-  var n={g:g,tela:tela,scr:scr,dono:dono,txt:''}; marcar(scr,'note',NOTES.length); marcar(g.children[0],'note',NOTES.length); NOTES.push(n); return n;
-}
-// Diretoria
-var NOTE_DONO_DIR=mesa(-12,2,-6.3,'#5b3416','__dono__'), NOTE_DIRETOR=mesa(-6,2,-6.3,'#7c4a24','Diretoria');
-var TV=textura(1024,460,function(c,w,h){desenharTV(c,w,h);});
-var tvM=new THREE.Mesh(new THREE.BoxGeometry(8.4,3.6,.15),[M('#111'),M('#111'),M('#111'),M('#111'),new THREE.MeshBasicMaterial({map:TV.t}),M('#111')]);
-tvM.position.set(-9,yA(2)+2.15,-9.95); scene.add(tvM); marcar(tvM,'tv');
-caixa(2.6,.45,.9,'#475569',-14.4,yA(2),-2.4); caixa(2.6,.6,.2,'#475569',-14.4,yA(2)+.2,-2.85);
-cil(.25,.2,.5,'#b45309',-2.8,yA(2),-9.3); (function(){var c=new THREE.Mesh(new THREE.IcosahedronGeometry(.55,0),M('#15803d',{flatShading:true})); c.position.set(-2.8,yA(2)+1.05,-9.3); scene.add(c);})();
-// Atendimento
-var NOTES_AT=[1.5,6.5,11.5].map(function(x){return mesa(x,2,-6.3,'#f9a8d4','Atendimento');});
-var quadroAt=textura(512,300,function(c,w,h){c.fillStyle='#fff';c.fillRect(0,0,w,h);c.fillStyle='#9d174d';c.font='bold 40px Segoe UI';c.fillText('💬 WhatsApp',24,56);var n=(D&&D.numeros)||{};c.fillStyle='#111';c.font='32px Segoe UI';c.fillText('Pedidos novos: '+(n.novos||0),24,120);if(!(D&&D.publico)){c.fillStyle=(n.pendentes?'#b91c1c':'#111');c.fillText('Sem resposta: '+(n.pendentes||0),24,170);c.fillStyle='#111';c.fillText('Retornos hoje: '+(n.retornos||0),24,220);}});
-var qAt=new THREE.Mesh(new THREE.PlaneGeometry(3,1.75),new THREE.MeshBasicMaterial({map:quadroAt.t})); qAt.position.set(13.5,yA(2)+2.3,-9.95); scene.add(qAt); marcar(qAt,'sala','Atendimento');
-// Produção
-var yP=yA(1);
-caixa(2.2,1.2,1.3,'#e5e7eb',-13,yP,-8.6); caixa(1.8,.2,.4,'#334155',-13,yP+1.2,-8.6);
-var papel=caixa(1.1,.02,.8,'#fff',-13,yP+.7,-7.8);
-caixa(2,.35,1.3,'#475569',-8,yP,-8.6); caixa(.3,1.7,.3,'#64748b',-7.2,yP,-9.1); caixa(1.9,.25,1.2,'#475569',-8,yP+1.6,-8.6);
-var prensa=caixa(1.5,.18,1,'#334155',-8.2,yP+1.1,-8.6);
-var brilhoPrensa=caixa(1.4,.04,.9,new THREE.MeshStandardMaterial({color:'#f97316',emissive:'#f97316',emissiveIntensity:0}),-8.2,yP+1.06,-8.6);
-caixa(1.6,1.1,1.1,'#1f2937',-3,yP,-8.6); var mugPrensa=cil(.38,.38,.6,new THREE.MeshStandardMaterial({color:'#ef4444',emissive:'#ef4444',emissiveIntensity:0}),-3,yP+1.1,-8.6);
-caixa(19,.8,.9,'#374151',-6,yP,-3.6); caixa(19,.05,.8,'#9ca3af',-6,yP+.8,-3.6);
-var ITENS_ESTEIRA=new THREE.Group(); scene.add(ITENS_ESTEIRA);
-caixa(3,.08,.5,'#94a3b8',1.8,yP+1.6,-9.75);
-// Estúdio
-var NOTE_DONO_EST=mesa(7,1,-6.3,'#6d28d9','__dono__');
-caixa(1.2,1.6,.4,'#f5f5f4',5,yP,-9.6);
-// Cafeteria
-caixa(4.6,1.05,.8,'#92400e',13,yP,-9.3); caixa(.6,.7,.5,'#111827',12,yP+1.05,-9.3); caixa(.25,.2,.25,'#fff',12.4,yP+1.05,-9.05);
-var CAFE_MESA=[[11.8,-5.4],[14.6,-5.4]];
-CAFE_MESA.forEach(function(p){cil(.6,.6,.06,'#78350f',p[0],yP+.75,p[1]); cil(.06,.06,.75,'#334155',p[0],yP,p[1]);});
-var BOLO=new THREE.Group(); cil(.35,.35,.3,'#fbcfe8',0,0,0,BOLO); cil(.25,.25,.15,'#f472b6',0,.3,0,BOLO);
-[[-.6,'#f43f5e'],[.6,'#3b82f6'],[0,'#facc15']].forEach(function(b){var bal=new THREE.Mesh(new THREE.SphereGeometry(.25,12,10),M(b[1])); bal.position.set(b[0],1.6,-.5); BOLO.add(bal);});
-BOLO.position.set(11.8,yP+.82,-5.4); BOLO.visible=false; scene.add(BOLO);
-// Expedição
-var y0=yA(0);
-caixa(4,.08,1.1,'#94a3b8',3,y0+.82,-5.6); caixa(3.8,.82,.06,'#cbd5e1',3,y0,-5.1);
-var PILHA=new THREE.Group(); scene.add(PILHA);
-caixa(.5,.3,.4,'#111827',4.6,y0+.9,-5.8);
-// Estoque: zonas por categoria
-var ZONAS3D=[];
-for(var zi=0;zi<6;zi++){
-  var zx=-14.7+zi*2.15, g=new THREE.Group(); g.position.set(zx,y0,-9.2); scene.add(g);
-  [-.95,.95].forEach(function(px){caixa(.07,2.6,.8,'#475569',px,0,0,g);});
-  [.05,.9,1.75,2.55].forEach(function(py){caixa(1.95,.06,.8,'#64748b',0,py,0,g);});
-  var caixas=new THREE.Group(); g.add(caixas);
-  var alerta=new THREE.Mesh(new THREE.SphereGeometry(.13,10,8),new THREE.MeshStandardMaterial({color:'#ef4444',emissive:'#ef4444',emissiveIntensity:1})); alerta.position.set(.8,2.8,.3); alerta.visible=false; g.add(alerta);
-  var a=new THREE.Object3D(); a.position.set(0,3.05,.3); g.add(a); var lb=rotulo('','placa',a);
-  marcar(g,'zona',zi); ZONAS3D.push({g:g,caixas:caixas,alerta:alerta,rot:lb,x:zx});
-}
-// Garagem: caminhão
-function criarCaminhao(){
-  var g=new THREE.Group();
-  caixa(1.7,.35,4.4,'#1f2937',0,.35,0,g);
-  var cab=caixa(1.75,1.5,1.3,'#f8fafc',0,.6,1.45,g);
-  caixa(1.6,.6,.05,new THREE.MeshStandardMaterial({color:'#93c5fd',metalness:.4,roughness:.1}),0,1.35,2.11,g);
-  var bau=caixa(1.85,1.95,2.9,'#ffffff',0,.6,-.75,g);
-  var logo=textura(512,256,function(c,w,h){c.fillStyle='#fff';c.fillRect(0,0,w,h);c.fillStyle=(D&&cor(D.cor,'#1d4ed8'))||'#1d4ed8';c.fillRect(0,170,w,40);c.font='bold 54px Segoe UI';c.textAlign='center';c.fillText('ENTREGA',w/2,90);c.font='30px Segoe UI';c.fillStyle='#334155';c.fillText(corta((D&&D.empresa)||'',24),w/2,140);});
-  logo.atualizar();
-  [-.93,.93].forEach(function(sx){var p=new THREE.Mesh(new THREE.PlaneGeometry(2.8,1.6),new THREE.MeshBasicMaterial({map:logo.t})); p.position.set(sx,1.6,-.75); p.rotation.y=sx>0?Math.PI/2:-Math.PI/2; g.add(p);});
-  [[-.85,1.4],[.85,1.4],[-.85,-1.4],[.85,-1.4]].forEach(function(r){var w=new THREE.Mesh(new THREE.CylinderGeometry(.38,.38,.3,16),M('#111827')); w.rotation.z=Math.PI/2; w.position.set(r[0],.38,r[1]); w.castShadow=true; g.add(w);});
-  [-.6,.6].forEach(function(sx){var l=new THREE.Mesh(new THREE.BoxGeometry(.3,.15,.05),new THREE.MeshStandardMaterial({color:'#fef9c3',emissive:'#fde047',emissiveIntensity:.3})); l.position.set(sx,.9,2.12); g.add(l);});
-  marcar(g,'van'); scene.add(g); g.userData.logo=logo; return g;
-}
-var CAM=criarCaminhao(), GARAGEM=new THREE.Vector3(12,0,-5.2);
-CAM.position.copy(GARAGEM);
-var camRot=new THREE.Object3D(); camRot.position.y=3.4; CAM.add(camRot); var camLabel=rotulo('','placa',camRot); camLabel.visible=false;
-
-// ================================================================ LOJAS DO OUTRO LADO DA AVENIDA
-var LOJAS={};
-function loja(id,x0,x1,corP,emoji){
-  var cx=(x0+x1)/2, w=x1-x0;
-  caixa(w,.15,8,'#d6d3d1',cx,0,18); caixa(w,4.6,.25,corP,cx,0,22); caixa(.25,4.6,8,corP,x0,0,18); caixa(.25,4.6,8,corP,x1,0,18);
-  caixa(w,.3,8.2,'#57534e',cx,4.6,18);
-  caixa(w,4.4,.08,vidro,cx,.15,14.05);
-  caixa(w*.5,1,1,'#78350f',cx,0,20.4);
-  var pl=textura(512,128,function(c,W,H){c.fillStyle=corP;c.fillRect(0,0,W,H);c.fillStyle='#fff';c.font='bold 64px Segoe UI';c.textAlign='center';c.textBaseline='middle';c.fillText(emoji+' '+id,W/2,H/2);}); pl.atualizar();
-  var p=new THREE.Mesh(new THREE.PlaneGeometry(Math.min(w-1,8),2),new THREE.MeshBasicMaterial({map:pl.t})); p.position.set(cx,5.6,13.9); p.rotation.y=Math.PI; scene.add(p);
-  var chao=marcar(caixa(w-.4,.05,7.6,'#e7e5e4',cx,.16,18),'loja',id);
-  LOJAS[id]={cx:cx,porta:new THREE.Vector3(cx,0,13.2),dentro:[new THREE.Vector3(cx-1.5,.2,17),new THREE.Vector3(cx+1.5,.2,17.5),new THREE.Vector3(cx,.2,16.2),new THREE.Vector3(cx-2.5,.2,18.5)],chao:chao};
-  p.userData={k:'loja',v:id};
-}
-loja('Padaria',-15,-5,'#b45309','🥐'); loja('Mercado',-3,8,'#15803d','🛒'); loja('Shopping',10,24,'#7c3aed','🛍️');
-
-// ================================================================ CASAS E APARTAMENTOS
-var LARES={};
-function casinha(id,x,z,corP,grande){
-  var w=grande?9:5.5, d=grande?8:5.5, h=grande?4.2:3.2, g=new THREE.Group(); g.position.set(x,0,z); scene.add(g);
-  caixa(w,h,d,corP,0,0,0,g);
-  var tel=new THREE.Mesh(new THREE.ConeGeometry(w*.78,2.2,4),M('#9a3412',{flatShading:true})); tel.position.y=h+1.1; tel.rotation.y=Math.PI/4; tel.castShadow=true; g.add(tel);
-  caixa(1,2,.1,'#7c2d12',0,0,d/2+.03,g);
-  var jan=[]; [-1,1].forEach(function(s){var m=new THREE.Mesh(new THREE.BoxGeometry(1.1,.9,.08),new THREE.MeshStandardMaterial({color:'#93c5fd',emissive:'#fde68a',emissiveIntensity:0})); m.position.set(s*(w/2-1.2),h*.55,d/2+.03); g.add(m); jan.push(m);});
-  marcar(g,'lar',id); LARES[id]={g:g,jan:jan,porta:new THREE.Vector3(x,0,z+d/2+.6),dentro:new THREE.Vector3(x,0,z),tipo:grande?'mansão':'casa'};
-  return LARES[id];
-}
-var CASAS_LIVRES=[24,30.5,37,43.5,50,56.5].map(function(x,i){return {x:x,cor:['#fde68a','#bbf7d0','#fbcfe8','#bfdbfe','#fed7aa','#ddd6fe'][i]};});
-casinha('__dono__',67,-5.5,'#f1f5f9',true);
-// prédio de apartamentos
-var APT={g:new THREE.Group(),jan:[],porta:new THREE.Vector3(-34,0,-1.6)}; APT.g.position.set(-34,0,-8); scene.add(APT.g);
-caixa(14,19,10,'#94a3b8',0,0,0,APT.g); caixa(14.4,.4,10.4,'#475569',0,19,0,APT.g); caixa(2,2.6,.1,'#1e293b',0,0,5.03,APT.g);
-for(var af=1;af<6;af++) for(var ac=0;ac<4;ac++){var m=new THREE.Mesh(new THREE.BoxGeometry(1.8,1.4,.08),new THREE.MeshStandardMaterial({color:'#bae6fd',emissive:'#fde68a',emissiveIntensity:0})); m.position.set(-4.8+ac*3.2,af*3.4+.6,5.03); APT.g.add(m); APT.jan.push(m);}
-marcar(APT.g,'lar','__apt__');
-(function(){var a=new THREE.Object3D(); a.position.set(0,20.4,0); APT.g.add(a); rotulo('🏢 Apartamentos','placa',a);})();
-// casas dos clientes (destino do caminhão)
-var CLIENTES3D=[-58,-48,-26.5,30,41,52].map(function(x,i){
-  var g=new THREE.Group(); g.position.set(x,0,18.5); scene.add(g);
-  caixa(6,3.4,6,['#fef3c7','#e0f2fe','#fce7f3','#dcfce7','#ede9fe','#ffedd5'][i],0,0,0,g);
-  var tel=new THREE.Mesh(new THREE.ConeGeometry(4.6,2,4),M('#7c2d12',{flatShading:true})); tel.position.y=4.4; tel.rotation.y=Math.PI/4; g.add(tel);
-  caixa(1,2,.1,'#78350f',0,0,-3.03,g);
-  var jan=new THREE.Mesh(new THREE.BoxGeometry(1.2,.9,.08),new THREE.MeshStandardMaterial({color:'#93c5fd',emissive:'#fde68a',emissiveIntensity:0})); jan.position.set(1.8,1.9,-3.03); g.add(jan);
-  var pino=new THREE.Mesh(new THREE.ConeGeometry(.5,1.2,12),new THREE.MeshStandardMaterial({color:'#ef4444',emissive:'#ef4444',emissiveIntensity:.4})); pino.rotation.x=Math.PI; pino.position.y=7; pino.visible=false; g.add(pino);
-  var a=new THREE.Object3D(); a.position.y=8.2; g.add(a); var lb=rotulo('','casa-rot',a); lb.visible=false;
-  marcar(g,'casa',i); return {g:g,x:x,pino:pino,rot:lb,jan:jan};
-});
-
-// ================================================================ BONECOS
-function criarBoneco(ap){
-  var g=new THREE.Group(), corpo=new THREE.Group(); g.add(corpo);
-  var pele=M(cor(ap.pele,'#E0AC88')), camisa=M(cor(ap.camisa,'#2563eb')), calca=M(ap.setor==='Diretoria'||ap.dono?'#111827':(ap.setor==='Produção'||ap.setor==='Estoque'?'#1e3a8a':'#334155')), sapato=M('#1c1917');
-  function perna(x){var p=new THREE.Group(); p.position.set(x,.95,0); var m=new THREE.Mesh(new THREE.CapsuleGeometry(.1,.62,4,8),calca); m.position.y=-.42; m.castShadow=true; p.add(m); var s=new THREE.Mesh(new THREE.BoxGeometry(.2,.11,.32),sapato); s.position.set(0,-.88,.05); p.add(s); corpo.add(p); return p;}
-  var pe=perna(-.12), pd=perna(.12);
-  var tronco=new THREE.Mesh(new THREE.CapsuleGeometry(.24,.42,4,10),camisa); tronco.scale.z=.72; tronco.position.y=1.32; tronco.castShadow=true; corpo.add(tronco);
-  if(ap.roupa>=1){var jaq=new THREE.Mesh(new THREE.CapsuleGeometry(.26,.38,4,10),M(ap.roupa>=2?'#111827':'#475569')); jaq.scale.set(1,1,.62); jaq.position.set(0,1.32,-.03); corpo.add(jaq);}
-  if(ap.setor==='Diretoria'||ap.dono){var grav=new THREE.Mesh(new THREE.BoxGeometry(.06,.32,.02),M('#b91c1c')); grav.position.set(0,1.42,.18); corpo.add(grav);}
-  function braco(x){var b=new THREE.Group(); b.position.set(x,1.6,0); var m=new THREE.Mesh(new THREE.CapsuleGeometry(.075,.46,4,8),camisa); m.position.y=-.3; m.castShadow=true; b.add(m); var mao=new THREE.Mesh(new THREE.SphereGeometry(.075,8,6),pele); mao.position.y=-.62; b.add(mao); corpo.add(b); return b;}
-  var be=braco(-.33), bd=braco(.33);
-  var pesc=new THREE.Mesh(new THREE.CylinderGeometry(.07,.08,.12,8),pele); pesc.position.y=1.72; corpo.add(pesc);
-  var cab=new THREE.Group(); cab.position.y=1.92; corpo.add(cab);
-  var cabeca=new THREE.Mesh(new THREE.SphereGeometry(.19,16,12),pele); cabeca.scale.set(.95,1.08,1); cabeca.castShadow=true; cab.add(cabeca);
-  [-.07,.07].forEach(function(x){var o=new THREE.Mesh(new THREE.SphereGeometry(.024,6,6),M('#0f172a')); o.position.set(x,.02,.175); cab.add(o);});
-  var nariz=new THREE.Mesh(new THREE.SphereGeometry(.03,6,6),pele); nariz.position.set(0,-.03,.19); cab.add(nariz);
-  var corCab=M(cor(ap.cabelo,'#1a1a1a')), est=ap.estilo||'Curto';
-  if(est!=='Careca'&&est!=='Boné'){var cb=new THREE.Mesh(new THREE.SphereGeometry(.2,14,10,0,Math.PI*2,0,Math.PI*.55),corCab); cb.position.y=.03; cb.rotation.x=-.25; cab.add(cb);}
-  if(est==='Longo'){var lg=new THREE.Mesh(new THREE.BoxGeometry(.36,.42,.12),corCab); lg.position.set(0,-.14,-.13); cab.add(lg);}
-  if(est==='Coque'){var cq=new THREE.Mesh(new THREE.SphereGeometry(.09,10,8),corCab); cq.position.set(0,.16,-.14); cab.add(cq);}
-  if(est==='Rabo de cavalo'){var rb=new THREE.Mesh(new THREE.CapsuleGeometry(.05,.25,4,6),corCab); rb.position.set(0,-.08,-.2); rb.rotation.x=.4; cab.add(rb);}
-  if(est==='Boné'){var bn=new THREE.Mesh(new THREE.SphereGeometry(.205,14,10,0,Math.PI*2,0,Math.PI*.5),camisa); bn.position.y=.03; cab.add(bn); var ab=new THREE.Mesh(new THREE.BoxGeometry(.3,.025,.2),camisa); ab.position.set(0,.05,.2); cab.add(ab);}
-  if(ap.roupa>=2){var ocl=new THREE.Mesh(new THREE.BoxGeometry(.24,.05,.02),M('#0f172a')); ocl.position.set(0,.03,.19); cab.add(ocl);}
-  var celular=new THREE.Mesh(new THREE.BoxGeometry(.07,.13,.015),M('#111827')); celular.position.set(0,-.66,.06); celular.visible=false; bd.add(celular);
-  var xicara=new THREE.Mesh(new THREE.CylinderGeometry(.045,.04,.09,10),M('#fff')); xicara.position.set(0,-.68,.05); xicara.visible=false; bd.add(xicara);
-  var prancheta=new THREE.Mesh(new THREE.BoxGeometry(.26,.34,.02),M('#a16207')); prancheta.position.set(0,-.62,.12); prancheta.rotation.x=-.6; prancheta.visible=false; be.add(prancheta);
-  var cx=new THREE.Mesh(new THREE.BoxGeometry(.5,.36,.4),M('#d6a15c')); cx.position.set(0,1.15,.35); cx.visible=false; corpo.add(cx);
-  // veículos (aparecem só na rua)
-  var bici=new THREE.Group(); [-.5,.5].forEach(function(z){var r=new THREE.Mesh(new THREE.TorusGeometry(.32,.04,6,16),M('#111827')); r.rotation.y=Math.PI/2; r.position.set(0,.34,z); bici.add(r);}); var qd=new THREE.Mesh(new THREE.BoxGeometry(.05,.05,1),M('#dc2626')); qd.position.y=.6; bici.add(qd); bici.visible=false; g.add(bici);
-  var moto=new THREE.Group(); [-.6,.6].forEach(function(z){var r=new THREE.Mesh(new THREE.CylinderGeometry(.33,.33,.15,14),M('#111827')); r.rotation.z=Math.PI/2; r.position.set(0,.34,z); moto.add(r);}); var mc=new THREE.Mesh(new THREE.BoxGeometry(.4,.4,1.2),M('#0ea5e9')); mc.position.y=.62; moto.add(mc); moto.visible=false; g.add(moto);
-  var carro=new THREE.Group(); var cb1=new THREE.Mesh(new THREE.BoxGeometry(1.7,.7,3.6),M(cor(ap.camisa,'#2563eb'),{metalness:.4,roughness:.35})); cb1.position.y=.55; carro.add(cb1); var cb2=new THREE.Mesh(new THREE.BoxGeometry(1.5,.6,1.9),M('#93c5fd',{metalness:.3,roughness:.1})); cb2.position.set(0,1.15,-.2); carro.add(cb2); [[-.8,1.1],[.8,1.1],[-.8,-1.1],[.8,-1.1]].forEach(function(r){var w=new THREE.Mesh(new THREE.CylinderGeometry(.32,.32,.25,14),M('#111827')); w.rotation.z=Math.PI/2; w.position.set(r[0],.32,r[1]); carro.add(w);}); carro.visible=false; g.add(carro);
-  var aN=new THREE.Object3D(); aN.position.y=2.38; g.add(aN); var lbN=rotulo('','nome',aN);
-  var aM=new THREE.Object3D(); aM.position.y=2.68; g.add(aM); var lbM=rotulo('','msg',aM);
-  scene.add(g);
-  return {g:g,corpo:corpo,pe:pe,pd:pd,be:be,bd:bd,cab:cab,celular:celular,xicara:xicara,prancheta:prancheta,cx:cx,bici:bici,moto:moto,carro:carro,rotN:lbN,rotM:lbM,t:Math.random()*10};
-}
-function aparenciaChave(p){return [p.pele,p.cabelo,p.estilo,p.camisa,(p.vida&&p.vida.roupa)||0].join('|');}
-
-// ================================================================ LUGARES E ROTAS
-var ELEV=new THREE.Vector3(17.7,0,-3);
-function V(x,y,z){return new THREE.Vector3(x,y,z);}
-function noPredio(p){return (p.x>-16.3&&p.x<16.2&&p.z<-.2&&p.z>-10.4)||(p.x>=16.2&&p.x<19.2&&p.z>-4.5&&p.z<-1.5&&p.y>.5);}
-function ladoRua(z){return z>7?12.5:1.5;}
-function rotaFora(a,b){var r=[], za=ladoRua(a.z), zb=ladoRua(b.z);
-  r.push(V(a.x,0,za)); if(za!==zb){r.push(V(a.x,0,zb));} r.push(V(b.x,0,zb)); r.push(b.clone()); return r;}
-function andarDe(p){return noPredio(p)?Math.max(0,Math.min(2,Math.round((p.y-.16)/AND))):-1;}
-function rota(de,para){
-  var r=[], fa=andarDe(de), fb=andarDe(para);
-  if(fa>=0&&fb>=0&&fa===fb){var y=yA(fa); r.push(V(de.x,y,-1.6)); r.push(V(para.x,y,-1.6)); r.push(para.clone()); return r;}
-  if(fa>=0){var y1=yA(fa); r.push(V(de.x,y1,-1.6)); r.push(V(15.3,y1,-1.6)); r.push(V(15.3,y1,-3)); r.push(V(ELEV.x,y1,ELEV.z));
-    var yAlvo=fb>=0?yA(fb):0; var ev1=V(ELEV.x,yAlvo,ELEV.z); ev1.elev=true; r.push(ev1);
-    if(fb>=0){r.push(V(15.3,yAlvo,-3)); r.push(V(15.3,yAlvo,-1.6)); r.push(V(para.x,yAlvo,-1.6)); r.push(para.clone()); return r;}
-    r.push(V(ELEV.x,0,1.5)); return r.concat(rotaFora(V(ELEV.x,0,1.5),para));}
-  if(fb>=0){var ent=V(ELEV.x,0,1.5); r=rotaFora(de,ent); r.push(V(ELEV.x,0,ELEV.z)); var yb=yA(fb); var ev=V(ELEV.x,yb,ELEV.z); ev.elev=true; r.push(ev);
-    r.push(V(15.3,yb,-3)); r.push(V(15.3,yb,-1.6)); r.push(V(para.x,yb,-1.6)); r.push(para.clone()); return r;}
-  return rotaFora(de,para);
-}
-var CAFE_LUG=[[11.2,-6.1],[12.4,-6.1],[14,-6.1],[15.2,-6.1],[11.8,-4.6],[14.6,-4.6]];
-function lugarSetor(p,ordem){
-  var s=p.setor, y2=yA(2), y1=yA(1), y0=yA(0);
-  if(s==='Diretoria') return {p:V(-6,y2,-7.15),sent:true,acao:p.acao==='lendo'?'lendo':'digitar',nota:NOTE_DIRETOR,sala:'Diretoria'};
-  if(s==='Atendimento'){var n=NOTES_AT[ordem%3]; return {p:V(n.g.position.x+(ordem>2?.9:0),y2,-7.15),sent:ordem<3,acao:'digitar',nota:ordem<3?n:null,sala:'Atendimento'};}
-  if(s==='Produção'){var px=[-13,-8,-3,1][Math.min(ordem,3)]+(ordem>3?(ordem-3)*1.2:0); return {p:V(px,y1,-7.2),acao:'trabalhar',sala:'Produção',face:Math.PI};}
-  if(s==='Estoque'){var zz=ZONAS3D[(ordem*2)%ZONAS3D.length]; return {p:V(zz.x,y0,-8),acao:p.acao==='carregando'?'carregar':'prancheta',sala:'Estoque',face:Math.PI};}
-  if(s==='Expedição') return {p:V(2+ordem*1.3,y0,-6.4),acao:'trabalhar',sala:'Expedição'};
-  if(s==='Entrega') return {p:V(14.5,y0,-8.6),acao:'parado',sala:'Garagem'};
-  return {p:V(0,y0,-4),acao:'parado'};
-}
-function lugarCafe(i){var c=CAFE_LUG[i%CAFE_LUG.length]; return {p:V(c[0],yA(1),c[1]),acao:'cafe',sala:'Cafeteria',face:Math.atan2(CAFE_MESA[i%2][0]-c[0],CAFE_MESA[i%2][1]-c[1])};}
-function lugarLoja(id,i){var l=LOJAS[id]; return {p:l.dentro[i%l.dentro.length].clone(),acao:id==='Padaria'||id==='Shopping'?'cafe':'parado',loja:id,face:0};}
-function lugarCasa(chave,vida,i){
-  if(chave==='__dono__'){var L=LARES['__dono__']; return {p:L.dentro.clone(),casa:'__dono__',esconder:true};}
-  if(vida&&vida.casa>=1) return {p:V(-34,0,-8),casa:'__apt__',esconder:true,apt:i};
-  var c=CASAS_LIVRES[i%CASAS_LIVRES.length]; if(!LARES['c'+i]) casinha('c'+i,c.x,-5,c.cor,false);
-  return {p:LARES['c'+i].dentro.clone(),casa:'c'+i,esconder:true};
-}
-function portaDe(l){ if(l.casa==='__apt__') return APT.porta.clone(); if(l.casa) return LARES[l.casa].porta.clone(); if(l.loja) return LOJAS[l.loja].porta.clone(); return null; }
-
-// ================================================================ HORÁRIO
-function agoraMin(){var d=new Date(); return d.getHours()*60+d.getMinutes()+d.getSeconds()/60;}
-function expediente(){return (D&&D.expediente)||{ini:8,fim:18,alm_ini:12,alm_fim:13,dias:[1,2,3,4,5]};}
-function diaUtil(){return expediente().dias.indexOf(new Date().getDay())>=0;}
-function situacaoHorario(chave){
-  var e=expediente(), m=agoraMin(), off=hashTxt(chave)%25;
-  if(!diaUtil()) return 'folga';
-  if(m<e.ini*60-20+off||m>=e.fim*60+off%10) return 'casa';
-  if(m>=e.alm_ini*60&&m<e.alm_fim*60) return 'almoco';
-  return 'trabalho';
-}
-
-// ================================================================ DONO (o seu boneco)
-var ultimaAtividade=Date.now();
-try{ ['mousemove','keydown','click','scroll','touchstart'].forEach(function(ev){ window.parent.document.addEventListener(ev,function(){ultimaAtividade=Date.now();},{passive:true}); }); }catch(e){}
-['mousemove','keydown','click','touchstart'].forEach(function(ev){document.addEventListener(ev,function(){ultimaAtividade=Date.now();},{passive:true});});
-var SECAO_LUGAR={'📊 Resumo':'dir','🏙️ Empresa ao vivo':'dir','📄 Nota fiscal':'dir','🎨 Loja e redes':'dir','💾 Backup':'dir','👁️ Interesse':'dir',
- '🏢 Apresentações':'estudio','🎬 Vitrine':'estudio','📦 Produtos':'estudio','🖼️ Fotos':'estudio','🎨 Galeria de artes':'estudio',
- '🖨️ Artes':'prod','👥 Clientes':'atend','🧾 Pedidos':'exped','🏷️ Etiquetas':'exped','🚚 Rastreio':'garagem','📍 Frete':'garagem','🏭 Estoque e compras':'estoque'};
-var DONO_TXT={dir:'Na sala dele, vendo os números',estudio:'No estúdio, cuidando dos produtos e fotos',prod:'Na produção, preparando as artes para imprimir',
- atend:'No atendimento, falando com clientes',exped:'Na expedição, conferindo pedidos e etiquetas',garagem:'Na garagem, acompanhando as entregas',estoque:'No estoque, com a prancheta na mão'};
-function lugarDono(){
-  var dn=(D&&D.dono)||{}, parado=(Date.now()-ultimaAtividade)/1000;
-  if(!dn.ativo) return Object.assign(lugarCasa('__dono__'),{txt:'Em casa (painel fechado)'});
-  if(parado>900) return Object.assign(lugarCasa('__dono__'),{txt:'Foi para casa (painel parado há muito tempo)'});
-  if(parado>120){var op=Math.floor(Date.now()/240000)%3; if(op===0) return Object.assign(lugarCafe(5),{txt:'De folga: tomando um cafezinho ☕'});
-    return Object.assign(lugarLoja(op===1?'Padaria':'Mercado',3),{txt:op===1?'De folga: foi na padaria 🥐':'De folga: passando no mercado 🛒'});}
-  var k=SECAO_LUGAR[dn.secao]||'dir', y2=yA(2), y1=yA(1), y0=yA(0), r;
-  if(k==='dir') r={p:V(-12,y2,-7.15),sent:true,acao:'digitar',nota:NOTE_DONO_DIR,sala:'Diretoria'};
-  else if(k==='estudio') r={p:V(7,y1,-7.15),sent:true,acao:'digitar',nota:NOTE_DONO_EST,sala:'Estúdio'};
-  else if(k==='prod') r={p:V(-11.2,y1,-7),acao:'prancheta',sala:'Produção',face:Math.PI};
-  else if(k==='atend') r={p:V(9,y2,-4.6),acao:'celular',sala:'Atendimento'};
-  else if(k==='exped') r={p:V(4.6,y0,-6.6),acao:'prancheta',sala:'Expedição'};
-  else if(k==='garagem') r={p:V(10,y0,-8.4),acao:'prancheta',sala:'Garagem'};
-  else { var zi=0, cats=(D&&D.zonas)||[]; for(var i=0;i<cats.length;i++){ if(dn.categoria&&cats[i].nome===dn.categoria){zi=i;break;} if(cats[i].repor) zi=i; }
-    r={p:V(ZONAS3D[Math.min(zi,5)].x,y0,-7.9),acao:'prancheta',sala:'Estoque',face:Math.PI}; }
-  r.txt=DONO_TXT[k]; return r;
-}
-
-// ================================================================ PLANEJAR ONDE CADA UM VAI
-function chaveL(l){return [l.p.x.toFixed(1),l.p.y.toFixed(1),l.p.z.toFixed(1)].join(',');}
-function planejar(){
-  if(!D) return;
-  var ordem={}, cafeI=0, almI=0, festa=festaAtiva();
-  var lista=D.equipe.slice(); lista.push(Object.assign({key:'__dono__',nome:(D.dono&&D.dono.nome)||'Você',setor:'Dono',cargo:'Dono',dono:true,vida:D.dono&&D.dono.vida},D.dono||{}));
-  lista.forEach(function(p,idx){
-    var P=pessoas[p.key]; if(!P) return;
-    var l, sit=p.dono?null:situacaoHorario(p.key);
-    if(p.dono) l=lugarDono();
-    else if(sit==='casa'||sit==='folga'){
-      if(sit==='folga'&&new Date().getHours()>=10&&new Date().getHours()<17&&(hashTxt(p.key)+new Date().getDate())%3===0){var lj=['Shopping','Mercado','Padaria'][hashTxt(p.key)%3]; l=Object.assign(lugarLoja(lj,almI++),{txt:'Folga: passeando no '+lj.toLowerCase()});}
-      else l=Object.assign(lugarCasa(p.key,p.vida,idx),{txt:sit==='casa'?'Em casa, fora do expediente':'Folga em casa'});
-    }
-    else if(sit==='almoco'){var lj2=['Padaria','Mercado','Shopping'][(hashTxt(p.key)+new Date().getDate())%3]; l=Object.assign(lugarLoja(lj2,almI++),{txt:'Horário de almoço: '+lj2.toLowerCase()});}
-    else if(P.celAte&&Date.now()<P.celAte) l=Object.assign({},P.lugarTrab||lugarSetor(p,0),{acao:'celular',txt:'📱 No celular…'});
-    else if(festa&&p.estado==='pausa'){l=Object.assign(lugarCafe(cafeI++),{txt:'🎉 Na festa: '+festa.texto});}
-    else if(p.estado==='dirigindo'){l={p:CAM.position.clone(),noCaminhao:true,txt:p.fazendo};}
-    else if(p.estado==='pausa'){l=Object.assign(lugarCafe(cafeI++),{txt:p.fazendo});}
-    else {var o=ordem[p.setor]||0; ordem[p.setor]=o+1; l=lugarSetor(p,o); l.txt=p.fazendo; P.lugarTrab=l;}
-    P.lugar=l; P.dado=p;
-    if(l.noCaminhao){P.g.visible=false; P.rota=[]; P.chave='cam'; return;}
-    var ch=chaveL(l)+(l.sent?'s':'');
-    if(P.chave===ch) return;
-    P.chave=ch;
-    if(primeira||!P.posto){ P.g.position.copy(l.p); P.rota=[]; P.posto=true; P.g.visible=!l.esconder; P.emCasa=l.esconder?l:null; }
-    else { var de=P.g.position.clone(); var porta=null;
-      if(P.emCasa){ de=portaDe(P.emCasa)||de; P.g.position.copy(de); P.g.visible=true; }
-      var alvo=l.esconder?portaDe(l):l.p;
-      P.rota=rota(de,alvo); if(l.esconder) P.rota.push(l.p.clone()); P.emCasa=null; }
-  });
-  primeira=false;
-}
-function festaAtiva(){ if(!D||!D.festas) return null; var t=Date.now(); for(var i=0;i<D.festas.length;i++){ if(D.festas[i].ate>t) return D.festas[i]; } return null; }
-
-// ================================================================ ANIMAÇÃO DAS PESSOAS
-var tmp=new THREE.Vector3();
-function poseBase(P){P.pe.rotation.x=0;P.pd.rotation.x=0;P.be.rotation.x=0;P.bd.rotation.x=0;P.be.rotation.z=0;P.bd.rotation.z=0;P.corpo.position.y=0;P.cab.rotation.x=0;
-  P.celular.visible=false;P.xicara.visible=false;P.prancheta.visible=false;P.cx.visible=false;}
-function atualizarPessoa(P,dt){
-  P.t+=dt; poseBase(P);
-  var l=P.lugar||{}, transp=(P.dado&&P.dado.vida&&P.dado.vida.transporte)||0, fora=!noPredio(P.g.position)&&P.g.position.y<.5;
-  P.bici.visible=P.moto.visible=P.carro.visible=false;
-  if(P.rota&&P.rota.length){
-    var alvo=P.rota[0], d=tmp.copy(alvo).sub(P.g.position), dist=d.length();
-    var resta=0; if(fora){ for(var i=0;i<P.rota.length;i++) if(!noPredio(P.rota[i])) resta++; }
-    var veic=fora&&resta>1&&transp>0;
-    var vel=alvo.elev?2.4:(veic?[2.6,6,9,12][transp]:2.6);
-    if(dist<=vel*dt){P.g.position.copy(alvo); P.rota.shift(); if(!P.rota.length&&l.esconder){P.g.visible=false; P.emCasa=l;}}
-    else { P.g.position.addScaledVector(d,vel*dt/dist); if(Math.abs(d.x)+Math.abs(d.z)>.01) P.g.rotation.y=Math.atan2(d.x,d.z); }
-    if(veic){ if(transp===1) P.bici.visible=true; else if(transp===2) P.moto.visible=true; else P.carro.visible=true; }
-    if(transp===3&&veic){P.corpo.visible=false;} else P.corpo.visible=true;
-    if(!alvo.elev&&!(veic&&transp>=2)){ var s=Math.sin(P.t*9); P.pe.rotation.x=s*.6; P.pd.rotation.x=-s*.6; P.be.rotation.x=-s*.5; P.bd.rotation.x=s*.5; }
-    if(veic&&transp<3){P.corpo.position.y=.25; P.pe.rotation.x=-1.1; P.pd.rotation.x=-1.1;}
-    return;
-  }
-  P.corpo.visible=true;
-  if(l.face!==undefined) P.g.rotation.y+=(l.face-P.g.rotation.y)*Math.min(1,dt*5); else P.g.rotation.y*=1-Math.min(1,dt*5);
-  if(l.sent){P.corpo.position.y=-.42; P.pe.rotation.x=-1.45; P.pd.rotation.x=-1.45;}
-  var a=l.acao||'parado', s2=Math.sin(P.t*10);
-  if(a==='digitar'){P.be.rotation.x=-1.25+s2*.08; P.bd.rotation.x=-1.25-s2*.08; P.cab.rotation.x=.12;}
-  else if(a==='trabalhar'){P.be.rotation.x=-.9+Math.sin(P.t*4)*.35; P.bd.rotation.x=-.9-Math.sin(P.t*4)*.35;}
-  else if(a==='carregar'){P.be.rotation.x=-1.3; P.bd.rotation.x=-1.3; P.cx.visible=true;}
-  else if(a==='prancheta'){P.be.rotation.x=-1.1; P.prancheta.visible=true; P.bd.rotation.x=-.5+Math.sin(P.t*3)*.15; P.cab.rotation.x=.25;}
-  else if(a==='celular'){P.bd.rotation.x=-1.6; P.bd.rotation.z=.25; P.celular.visible=true; P.cab.rotation.x=.35;}
-  else if(a==='cafe'){P.xicara.visible=true; var gole=(P.t%6)<1.2; P.bd.rotation.x=gole?-2.2:-.7; P.bd.rotation.z=gole?.35:0;}
-  else if(a==='lendo'){P.be.rotation.x=-1.0; P.bd.rotation.x=-1.0; P.prancheta.visible=true; P.cab.rotation.x=.3;}
-  P.corpo.position.y+=Math.sin(P.t*2)*.008;
-}
-
-// ================================================================ CAMINHÃO
-var camRota=[], camAssin='', camEspera=0, camTxt='';
-function planejarCaminhao(){
-  var ent=(D&&D.entregas)||[], ass=ent.slice(0,6).map(function(e){return e.id;}).join(',');
-  CLIENTES3D.forEach(function(c,i){var e=ent[i]; c.pino.visible=!!e; c.rot.visible=!!e;
-    if(e) c.rot.element.innerHTML='📦 '+esc(e.id)+'<br>'+esc(corta(e.nome,22))+'<br>'+esc(corta(e.endereco?e.endereco+' - '+e.cidade:e.cidade,34));});
-  if(ass===camAssin) return; camAssin=ass;
-  if(!ent.length){camRota=[{p:V(12,0,7)},{p:GARAGEM.clone(),txt:''}]; return;}
-  var r=[{p:V(12,0,7)}];
-  ent.slice(0,6).forEach(function(e,i){var hx=CLIENTES3D[i].x; r.push({p:V(hx,0,7),ent:i}); r.push({p:V(hx,0,10.4),ent:i,espera:3.5,txt:'📦 Entregando '+e.id+' para '+corta(e.nome,18)}); r.push({p:V(hx,0,7),ent:i});});
-  r.push({p:V(12,0,7)}); r.push({p:GARAGEM.clone(),espera:5,txt:'🅿️ De volta na garagem'}); r.ciclo=true; camRota=r; camRota.i=0;
-}
-function atualizarCaminhao(dt){
-  if(!camRota.length) return;
-  if(camEspera>0){camEspera-=dt; return;}
-  var i=camRota.i||0, alvo=camRota[i]; if(!alvo) return;
-  var d=tmp.copy(alvo.p).sub(CAM.position), dist=d.length(), vel=7;
-  if(dist<=vel*dt){ CAM.position.copy(alvo.p); if(alvo.espera) camEspera=alvo.espera;
-    if(alvo.txt!==undefined){camLabel.visible=!!alvo.txt; camLabel.element.textContent=alvo.txt;}
-    if(i<camRota.length-1) camRota.i=i+1; else if(camRota.ciclo) camRota.i=0; else camRota=[]; }
-  else { CAM.position.addScaledVector(d,vel*dt/dist); var ang=Math.atan2(d.x,d.z), dif=((ang-CAM.rotation.y+Math.PI*3)%(Math.PI*2))-Math.PI; CAM.rotation.y+=dif*Math.min(1,dt*6);
-    var eAlvo=(alvo.ent!=null&&D&&D.entregas)?D.entregas[alvo.ent]:null; if(eAlvo){camLabel.visible=true; camLabel.element.textContent='🚚 '+(motorista()||'Motorista')+' → '+corta(eAlvo.nome,16)+' · '+corta(eAlvo.cidade,20);} else if(D&&D.entregas&&D.entregas.length){camLabel.visible=true; camLabel.element.textContent='🚚 Voltando para a garagem';} }
-}
-function motorista(){ if(!D) return ''; for(var i=0;i<D.equipe.length;i++) if(D.equipe[i].setor==='Entrega') return D.equipe[i].nome; return ''; }
-
-// ================================================================ LUZES, DIA E NOITE
-function atualizarLuzes(dt){
-  var h=agoraMin()/60, dia=Math.max(0,Math.min(1,(Math.min(h-5.5,19.5-h))/1.5)), noite=1-dia;
-  sol.intensity=.2+1.4*dia; hemi.intensity=.25+.7*dia;
-  var ceu=new THREE.Color('#0b1d3a').lerp(new THREE.Color('#bfdcf5'),dia); scene.background=ceu; scene.fog.color.copy(ceu);
-  POSTES.forEach(function(l){l.material.emissiveIntensity=noite*1.4;});
-  var cont={}; Object.keys(pessoas).forEach(function(k){var P=pessoas[k]; if(!P.g.visible) return; var s=salaDe(P.g.position); if(s) cont[s.id]=(cont[s.id]||0)+1;});
-  SALAS.forEach(function(s){var on=cont[s.id]>0, alvo=on?(.9+noite*.8):0; s.luz.intensity+=(alvo*8-s.luz.intensity)*Math.min(1,dt*3); s.painel.material.emissiveIntensity=on?1.1:.08;});
-  var hs=new Date().getHours(), acordado=hs>=6&&hs<23;
-  Object.keys(LARES).forEach(function(id){var L=LARES[id], tem=false; Object.keys(pessoas).forEach(function(k){var P=pessoas[k]; if(P.emCasa&&P.emCasa.casa===id) tem=true;});
-    L.jan.forEach(function(j){j.material.emissiveIntensity=(tem&&acordado)?(.4+noite*1.2):0;});});
-  var ocupados={}; Object.keys(pessoas).forEach(function(k){var P=pessoas[k]; if(P.emCasa&&P.emCasa.casa==='__apt__') ocupados[P.emCasa.apt%APT.jan.length]=1;});
-  APT.jan.forEach(function(j,i){j.material.emissiveIntensity=(ocupados[i]&&acordado)?(.4+noite*1.2):0;});
-  CLIENTES3D.forEach(function(c,i){c.jan.material.emissiveIntensity=noite*(i%2?1:.2);});
-  brilhoPrensa.material.emissiveIntensity=(D&&D.producao&&D.producao.length)?(.6+Math.sin(performance.now()/300)*.4):0;
-  mugPrensa.material.emissiveIntensity=(D&&D.producao&&D.producao.length)?.6:0;
-}
-
-// ================================================================ OBJETOS QUE MUDAM COM OS DADOS
-function produtoMini(tipo,corP){
-  var g=new THREE.Group();
-  if(tipo==='caneca'){cil(.18,.18,.34,'#fff',0,0,0,g); var al=new THREE.Mesh(new THREE.TorusGeometry(.1,.03,6,12),M('#fff')); al.position.set(.22,.17,0); g.add(al); cil(.185,.185,.12,corP,0,.1,0,g);}
-  else if(tipo==='camiseta'){caixa(.5,.05,.55,corP,0,0,0,g); caixa(.75,.05,.2,corP,0,0,.15,g);}
-  else if(tipo==='copo'){cil(.17,.12,.5,'#cbd5e1',0,0,0,g); cil(.18,.18,.07,'#334155',0,.5,0,g); cil(.175,.13,.15,corP,0,.18,0,g);}
-  else if(tipo==='bone'){var b=new THREE.Mesh(new THREE.SphereGeometry(.22,10,8,0,Math.PI*2,0,Math.PI/2),M(corP)); g.add(b); caixa(.3,.03,.2,corP,0,0,.22,g);}
-  else if(tipo==='almofada'){caixa(.5,.2,.5,corP,0,0,0,g);}
-  else if(tipo==='chaveiro'){caixa(.22,.04,.28,corP,0,0,0,g);}
-  else caixa(.4,.3,.4,'#d6a15c',0,0,0,g);
-  return g;
-}
-function tipoPeca(t){t=String(t||'').toLowerCase(); var r=[['canec','caneca'],['copo','copo'],['térm','copo'],['termic','copo'],['camis','camiseta'],['bon','bone'],['chav','chaveiro'],['almof','almofada']];
-  for(var i=0;i<r.length;i++) if(t.indexOf(r[i][0])>=0) return r[i][1]; return 'caixa';}
-var CORES_P=['#7c3aed','#ec4899','#0ea5e9','#f59e0b','#10b981','#ef4444'];
-var assObj='';
-function atualizarObjetos(){
-  TV.atualizar(); quadroAt.atualizar(); placaLoja.atualizar(); CAM.userData.logo.atualizar();
-  var fe0=festaAtiva(), fb0=document.getElementById('festa'); fb0.style.display=fe0?'block':'none'; if(fe0) fb0.textContent='🎉 '+fe0.texto+' — festa na cafeteria!'; BOLO.visible=!!fe0;
-  var ass=JSON.stringify([D.producao,D.zonas,D.numeros.caminho,D.numeros.producao,D.publico]); if(ass===assObj) return; assObj=ass;
-  while(ITENS_ESTEIRA.children.length) ITENS_ESTEIRA.remove(ITENS_ESTEIRA.children[0]);
-  (D.producao||[]).slice(0,8).forEach(function(p,i){var m=produtoMini(tipoPeca(p.cats&&p.cats[0]),CORES_P[i%6]); m.userData={k:'item',v:i,fase:i/Math.max(1,Math.min(8,D.producao.length))}; m.traverse(function(o){o.userData.k='item';o.userData.v=i;}); m.position.set(-15,yP+.85,-3.6); ITENS_ESTEIRA.add(m);});
-  while(PILHA.children.length) PILHA.remove(PILHA.children[0]);
-  var n=Math.min(10,(D.numeros.caminho||0)+(D.numeros.producao||0));
-  for(var i=0;i<n;i++) caixa(.6,.45,.5,'#d6a15c',-.9+(i%3)*.65,y0+Math.floor(i/3)*.46,-8.6,PILHA);
-  PILHA.traverse(function(o){o.userData.k='sala';o.userData.v='Expedição';});
-  var zonas=D.zonas||[];
-  ZONAS3D.forEach(function(Z,i){
-    while(Z.caixas.children.length) Z.caixas.remove(Z.caixas.children[0]);
-    var z=zonas[i]; Z.g.visible=true;
-    if(!z){Z.rot.element.textContent='—'; Z.alerta.visible=false; return;}
-    Z.rot.element.textContent=corta(z.nome,16); Z.rot.element.className='placa'+(z.repor&&!D.publico?' alerta':'');
-    var qt=Math.round((z.nivel==null?.6:z.nivel)*9), tp=tipoPeca(z.nome);
-    for(var k=0;k<qt;k++){var nv=Math.floor(k/3), c=k%3; caixa(.5,.42,.5,z.repor&&!D.publico?'#fca5a5':'#d6a15c',-.6+c*.6,.12+nv*.85,0,Z.caixas);}
-    for(var j=0;j<3;j++){var pm=produtoMini(tp,CORES_P[(i+j)%6]); pm.position.set(-.6+j*.6,2.62,0); Z.caixas.add(pm);}
-    Z.alerta.visible=!!(z.repor&&!D.publico);
-    Z.caixas.traverse(function(o){o.userData.k='zona';o.userData.v=i;});
-  });
-}
-function animarEsteira(dt){ if(!(D&&D.producao&&D.producao.length)) return; ITENS_ESTEIRA.children.forEach(function(m){m.userData.fase=(m.userData.fase+dt/12)%1; m.position.x=-15+18*m.userData.fase;}); papel.position.z=-7.8+Math.sin(performance.now()/500)*.15; prensa.position.y=yP+1.1+.12+Math.sin(performance.now()/450)*.12; }
-
-function desenharTV(c,w,h){
-  var n=(D&&D.numeros)||{}, sem=(D&&D.semana)||[];
-  c.fillStyle='#0b1220'; c.fillRect(0,0,w,h);
-  c.fillStyle='#67e8f9'; c.font='bold 34px Segoe UI'; c.fillText('📊 PAINEL AO VIVO',28,50);
-  c.fillStyle='#e2e8f0'; c.font='28px Segoe UI'; c.textAlign='right'; c.fillText(new Date().toLocaleTimeString('pt-BR'),w-28,50); c.textAlign='left';
-  if(n.fat){c.fillStyle='#86efac'; c.font='bold 30px Segoe UI'; c.fillText('Faturamento hoje: '+n.fat,28,96);}
-  var nums=[['Pedidos hoje',n.hoje,'#fff'],['Na produção',n.producao,'#fbbf24'],['A caminho',n.caminho,'#60a5fa'],['Entregues 7d',n.entregues,'#4ade80']];
-  nums.forEach(function(x,i){var px=28+(i%2)*230, py=150+Math.floor(i/2)*120; c.fillStyle='#94a3b8'; c.font='24px Segoe UI'; c.fillText(x[0],px,py); c.fillStyle=x[2]; c.font='bold 60px Segoe UI'; c.fillText(String(x[1]||0),px,py+62);});
-  var mx=1; sem.forEach(function(s){mx=Math.max(mx,s.qtd);});
-  c.fillStyle='#94a3b8'; c.font='24px Segoe UI'; c.fillText('Pedidos nos últimos 7 dias',520,96);
-  sem.forEach(function(s,i){var bh=Math.max(4,250*s.qtd/mx), bx=530+i*66; var gr=c.createLinearGradient(0,400-bh,0,400); gr.addColorStop(0,'#22d3ee'); gr.addColorStop(1,'#0e7490'); c.fillStyle=gr; c.fillRect(bx,400-bh,46,bh);
-    c.fillStyle='#e2e8f0'; c.font='22px Segoe UI'; c.textAlign='center'; c.fillText(String(s.qtd),bx+23,392-bh); c.fillStyle='#94a3b8'; c.fillText(s.dia,bx+23,432); c.textAlign='left';});
-  var ev=(D&&D.eventos)||[]; if(ev.length){c.fillStyle='#a5b4fc'; c.font='22px Segoe UI'; c.fillText('🔔 '+ev[Math.floor(Date.now()/4000)%ev.length],28,h-18);}
-}
-function atualizarNotebooks(){
-  NOTES.forEach(function(n){n.ativo=null;});
-  Object.keys(pessoas).forEach(function(k){var P=pessoas[k], l=P.lugar; if(l&&l.nota&&!(P.rota&&P.rota.length)&&P.g.visible){l.nota.ativo=P;}});
-  NOTES.forEach(function(n){var P=n.ativo, t1=P?('👤 '+P.dado.nome):'💤 desligado', t2=P?(P.lugar.txt||P.dado.fazendo||''):''; var ch=t1+t2; if(ch!==n.txt){n.txt=ch; n.tela.atualizar({t1:t1,t2:t2});}});
-}
-
-// ================================================================ CONVERSAS (mensagem pequena em cima da cabeça)
-var FALAS=['Bom dia, pessoal!','Alguém viu meu carregador?','Esse café tá ótimo ☕','Hoje o dia tá corrido!','Bora que tem pedido!','Vocês viram o jogo ontem?',
- 'Que calor hoje, hein','Fim de semana chegando 🙌','Preciso de férias kkk','Ficou linda essa caneca!','Quem vai no almoço?','Tô quase terminando aqui',
- 'Essa arte ficou top','Alguém quer pão de queijo?','Choveu lá em casa ontem','Meu filho começou na escola nova','Vou trocar de celular esse mês',
- 'O chefe tá de bom humor hoje 😄','Separei as caixas novas','Esse cliente é muito gente boa'];
-var RESPOSTAS=['Verdade!','Kkkk demais','Nem me fala','Sério?','Bora!','Também acho','Haha boa','Eu vi!','Que legal!','Tô dentro'];
-var FOFOCA=['Ouvi dizer que vai ter bônus 👀','Sabia que a Ana comprou bicicleta nova?','Dizem que o caminhão vai ganhar adesivo novo','Parece que vem pedido grande aí…'];
-function falar(P,txt,seg){ if(!P||!P.g.visible) return; P.rotM.element.textContent=txt; P.rotM.element.style.opacity=1; clearTimeout(P.tFala); P.tFala=setTimeout(function(){P.rotM.element.style.opacity=0;},(seg||5)*1000); }
-function visiveis(f){return Object.keys(pessoas).map(function(k){return pessoas[k];}).filter(function(P){return P.g.visible&&P.dado&&!(P.rota&&P.rota.length)&&(!f||f(P));});}
-function sorteio(a){return a[Math.floor(Math.random()*a.length)];}
-setInterval(function(){
-  if(!D||D.publico&&Math.random()<.3) return;
-  var r=Math.random(), noCafe=visiveis(function(P){return P.lugar&&(P.lugar.sala==='Cafeteria'||P.lugar.loja);});
-  if(r<.45&&noCafe.length>=2){var a=sorteio(noCafe), b=sorteio(noCafe.filter(function(x){return x!==a;})); falar(a,(Math.random()<.25?sorteio(FOFOCA):sorteio(FALAS))+' → '+b.dado.nome); setTimeout(function(){falar(b,sorteio(RESPOSTAS));},2500); return;}
-  var trab=visiveis(function(P){return P.dado.key!=='__dono__'&&P.lugar&&P.lugar.sala&&P.lugar.sala!=='Cafeteria'&&P.dado.setor!=='Diretoria';});
-  if(r<.62&&trab.length){var p=sorteio(trab), outros=visiveis(function(P){return P!==p&&P.dado.key!=='__dono__';}); if(!outros.length) return; var dest=sorteio(outros);
-    p.celAte=Date.now()+25000; planejar(); falar(p,'📱 → '+dest.dado.nome+': '+sorteio(FALAS),6); setTimeout(function(){falar(dest,'📱 '+p.dado.nome+' mandou mensagem');},1500);
-    setTimeout(function(){var dir=visiveis(function(P){return P.dado.setor==='Diretoria';})[0]; if(dir&&p.celAte&&Date.now()<p.celAte){falar(dir,p.dado.nome+', larga esse celular e volta pro trabalho! 😠',5); p.celAte=0; setTimeout(function(){falar(p,'Desculpa, chefe! Já voltei 😅');},1800); planejar();}},14000);
-    return;}
-  if(r<.85&&trab.length){var q=sorteio(trab); falar(q,sorteio(FALAS));}
-},7000);
-var ultimosNovos=null, ultimasEntregas=null;
-function anunciarEventos(){
-  var ids=(D.novos||[]).map(function(x){return x.id;}), ent=(D.entregas||[]).map(function(x){return x.id;});
-  if(ultimosNovos){ ids.filter(function(i){return ultimosNovos.indexOf(i)<0;}).forEach(function(i,k){
-      var p=D.novos.filter(function(x){return x.id===i;})[0]; setTimeout(function(){
-        var dono=pessoas['__dono__']; falar(dono,'🔔 Pedido novo! '+i+(p?' · '+corta(p.itens,30):''),7);
-        var at=visiveis(function(P){return P.dado.setor==='Atendimento';})[0]; if(at) falar(at,'Chegou pedido: '+(p?corta(p.itens,32):i)+' 🎉',6);
-        var dr=visiveis(function(P){return P.dado.setor==='Diretoria';})[0]; if(dr) setTimeout(function(){falar(dr,'Pessoal, pedido novo! Todo mundo pro posto 💪',6);},2000);
-      },k*3000);}); }
-  if(ultimasEntregas){ ent.filter(function(i){return ultimasEntregas.indexOf(i)<0;}).forEach(function(i){var e=D.entregas.filter(function(x){return x.id===i;})[0]; var mt=visiveis(function(P){return P.dado.setor==='Expedição';})[0]; if(mt&&e) falar(mt,'Saiu pra entrega: '+e.cidade+' 🚚',6);}); }
-  ultimosNovos=ids; ultimasEntregas=ent;
-  var fe=festaAtiva(); if(fe&&!anunciarEventos.festa){anunciarEventos.festa=fe.texto; visiveis().slice(0,3).forEach(function(P,i){setTimeout(function(){falar(P,['Parabéns!! 🎉','Uhuuu! 🥳','Merecido! 👏'][i%3]);},i*1500);});}
-}
-
-// ================================================================ ATUALIZAR COM OS DADOS DO PAINEL
-function rotuloPessoa(P,p){
-  var H={feliz:'😊',tranquilo:'😌',estressado:'😰',bravo:'😠',triste:'😢'}[p.humor]||'🙂';
-  var din=(!D.publico&&p.vida&&p.vida.dinheiro!=null)?' · '+moedas(p.vida.dinheiro):'';
-  P.rotN.element.innerHTML=(p.dono?'👤 ':'')+H+' '+esc(corta(p.nome,14))+din;
-}
-function mcAtualizar(d){
-  D=d;
-  var lista=d.equipe.slice(), dn=d.dono||{};
-  lista.push({key:'__dono__',nome:dn.nome||'Você',setor:'Dono',dono:true,pele:dn.pele,cabelo:dn.cabelo,estilo:dn.estilo,camisa:dn.camisa,humor:dn.humor||'feliz',vida:dn.vida});
-  var vivos={};
-  lista.forEach(function(p){
-    vivos[p.key]=1; var P=pessoas[p.key], ap=aparenciaChave(p);
-    if(P&&P.ap!==ap){ var pos=P.g.position.clone(), vis=P.g.visible, emc=P.emCasa, ch=P.chave; scene.remove(P.g); P=null; delete pessoas[p.key];
-      P=criarBoneco({pele:p.pele,cabelo:p.cabelo,estilo:p.estilo,camisa:p.camisa,setor:p.setor,dono:p.dono,roupa:(p.vida&&p.vida.roupa)||0}); P.g.position.copy(pos); P.g.visible=vis; P.emCasa=emc; P.chave=ch; P.posto=true; pessoas[p.key]=P; }
-    if(!P){P=criarBoneco({pele:p.pele,cabelo:p.cabelo,estilo:p.estilo,camisa:p.camisa,setor:p.setor,dono:p.dono,roupa:(p.vida&&p.vida.roupa)||0}); pessoas[p.key]=P;}
-    P.ap=ap; P.dado=p; marcar(P.g,'p',p.key); rotuloPessoa(P,p);
-  });
-  Object.keys(pessoas).forEach(function(k){ if(!vivos[k]){scene.remove(pessoas[k].g); delete pessoas[k];} });
-  planejar(); planejarCaminhao(); atualizarObjetos(); anunciarEventos();
-  var c=document.getElementById('carregando'); if(c) c.remove();
-  if(popAberto) abrir(popAberto[0],popAberto[1]);
-}
-window.mcAtualizar=mcAtualizar;
-setInterval(function(){ if(D) planejar(); },3000);
-setInterval(function(){ if(D){ atualizarNotebooks(); TV.atualizar(); var e=expediente(), d=new Date(), aberto=diaUtil()&&agoraMin()>=e.ini*60&&agoraMin()<e.fim*60, alm=agoraMin()>=e.alm_ini*60&&agoraMin()<e.alm_fim*60;
-  document.getElementById('hora').textContent='🕐 '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})+' · '+(aberto?(alm?'🍽️ Almoço':'🟢 Expediente'):'🌙 Fora do expediente'); } },1000);
-
-// ================================================================ CLIQUES E JANELAS DE INFORMAÇÃO
-var ray=new THREE.Raycaster(), mouse=new THREE.Vector2(), baixo=null;
-renderer.domElement.addEventListener('pointerdown',function(e){baixo=[e.clientX,e.clientY];});
-renderer.domElement.addEventListener('pointerup',function(e){
-  if(!baixo||Math.abs(e.clientX-baixo[0])+Math.abs(e.clientY-baixo[1])>6) return;
-  var r=renderer.domElement.getBoundingClientRect(); mouse.x=((e.clientX-r.left)/r.width)*2-1; mouse.y=-((e.clientY-r.top)/r.height)*2+1;
-  ray.setFromCamera(mouse,cam); var hits=ray.intersectObjects(scene.children,true);
-  for(var i=0;i<hits.length;i++){ var o=hits[i].object, vis=true, a=o; while(a){ if(!a.visible){vis=false;break;} a=a.parent; } if(!vis) continue; while(o&&!o.userData.k) o=o.parent; if(o&&o.userData.k){abrir(o.userData.k,o.userData.v); return;} }
-  fechar();
-});
-function btn(txt,key,pri){ if(D.publico||!key) return ''; return '<button class="ac'+(pri?' pri':'')+'" data-key="'+esc(key)+'">'+esc(txt)+'</button>'; }
-function nav(txt,k){ return k?btn(txt,'mc_nav_'+k):''; }
-function linha(a,b){ return '<div class="lin"><span>'+esc(a)+'</span><b>'+esc(b)+'</b></div>'; }
-var HUMOR={feliz:['😊','Feliz','#dcfce7','#166534'],tranquilo:['😌','Tranquilo','#e0f2fe','#075985'],estressado:['😰','Estressado','#fef3c7','#92400e'],bravo:['😠','Bravo','#fee2e2','#991b1b'],triste:['😢','Triste','#e0e7ff','#3730a3']};
-function membrosProducao(){ return D.equipe.filter(function(x){return x.setor==='Produção';}); }
-function cardNovo(p){ return '<div class="ped"><b>'+esc(p.id)+'</b> · '+esc(p.nome)+(p.total?'<span style="float:right;font-weight:700">'+esc(p.total)+'</span>':'')
-  +'<br><small>'+esc(p.itens)+'</small><br><small>⏱️ esperando '+esc(p.espera)+' · 📍 '+esc(p.cidade)+'</small>'
-  +'<div class="acoes">'+btn('✅ Autorizar','mc_apr_'+p.id,1)+btn('❌ Recusar','mc_rec_'+p.id)+'</div></div>'; }
-function cardProd(p){ var q=membrosProducao()[p.quem];
-  return '<div class="ped"><b>'+esc(p.id)+'</b> · '+esc(p.nome)+(p.atrasado&&!D.publico?' <span class="humor" style="background:#fee2e2;color:#991b1b">atrasado</span>':'')
-  +'<br><small>'+esc(p.itens)+'</small><br><small>👷 '+esc(q?q.nome:'equipe da produção')+' · na fila há '+esc(p.espera)+'</small>'
-  +'<div class="acoes">'+btn('📦 Pronto, enviar','mc_env_'+p.id,1)+'</div></div>'; }
-function cardEnt(e){ return '<div class="ped"><b>'+esc(e.id)+'</b> · '+esc(e.nome)+(e.atrasado&&!D.publico?' ⚠️ atrasado':'')
-  +'<br><small>📍 '+(e.endereco?esc(e.endereco)+' - ':'')+esc(e.cidade)+(e.cep?' · CEP '+esc(e.cep):'')+'</small>'
-  +'<br><small>📦 '+esc(e.itens)+'</small><br><small>🚚 '+esc(e.transportadora)+(e.codigo?' · código '+esc(e.codigo):(D.publico?'':' · sem código de rastreio'))+(e.previsao?' · previsão '+esc(e.previsao):'')+'</small>'
-  +'<div class="acoes">'+btn('✅ Entregue','mc_ent_'+e.id,1)+'</div></div>'; }
-function listaPessoas(f){ var r=''; Object.keys(pessoas).forEach(function(k){var P=pessoas[k]; if(P.dado&&f(P)){var H=HUMOR[P.dado.humor]||HUMOR.feliz; r+='<div class="ev clicavel" data-pessoa="'+esc(k)+'">'+H[0]+' <b>'+esc(P.dado.nome)+'</b> · '+esc((P.lugar&&P.lugar.txt)||P.dado.fazendo||'')+'</div>';}}); return r||'<p class="vazio">Ninguém aqui agora.</p>'; }
-var TRANSP=['🚶 A pé','🚲 Bicicleta','🏍️ Moto','🚗 Carro'];
-function blocoVida(v){ if(!v||D.publico) return '';
-  return '<h4>Vida na cidade</h4>'+linha('Dinheiro',moedas(v.dinheiro))+linha('Transporte',TRANSP[v.transporte||0])+linha('Mora em',v.casa?'🏢 Apartamento':'🏠 Casa simples')
-   +(v.extrato&&v.extrato.length?'<div style="margin-top:4px">'+v.extrato.slice(-6).reverse().map(function(x){return '<div class="ev">'+esc(x)+'</div>';}).join('')+'</div>':''); }
-function abrir(k,v){
-  var t='',c='';
-  if(k==='p'){
-    var P=pessoas[v]; if(!P||!P.dado){fechar();return;} var p=P.dado, H=HUMOR[p.humor]||HUMOR.feliz;
-    t=(p.dono?'👤 ':'')+p.nome+' · '+(p.cargo||p.setor);
-    c=linha('Agora',(P.lugar&&P.lugar.txt)||p.fazendo||'')+'<div class="lin"><span>Humor</span><span class="humor" style="background:'+H[2]+';color:'+H[3]+'">'+H[0]+' '+H[1]+'</span></div>'
-     +(p.motivo?'<div class="motivo">💭 '+esc(p.motivo)+'</div>':'')+(p.rendimento?linha('Rendimento',p.rendimento):'')+blocoVida(p.vida);
-    if(p.setor==='Diretoria') c+='<h4>Esperando autorização</h4>'+((D.novos||[]).map(cardNovo).join('')||'<p class="vazio">Nenhum pedido esperando.</p>');
-    else if(p.setor==='Produção'){var meus=(D.producao||[]).filter(function(x){return (p.ids||[]).indexOf(x.id)>=0;}); c+='<h4>Na bancada</h4>'+(meus.map(cardProd).join('')||'<p class="vazio">Sem pedido agora.</p>');}
-    else if(p.setor==='Entrega') c+='<h4>Entregas</h4>'+((D.entregas||[]).map(cardEnt).join('')||'<p class="vazio">Nenhuma entrega.</p>');
-    else if(p.dono) c+='<div class="motivo">Ele acompanha o que você faz no painel. Parado por 2 minutos, sai para um café; depois de 15 minutos, vai para casa.</div>';
-  } else if(k==='note'){ var n=NOTES[v], Q=n&&n.ativo; t='💻 Tela do notebook';
-    c=Q?('<div class="tela">👤 '+esc(Q.dado.nome)+'<br>'+esc((Q.lugar&&Q.lugar.txt)||Q.dado.fazendo||'')+'<br><br>'+((Q.dado.ids||[]).length?'Pedidos: '+esc(Q.dado.ids.join(', ')):'')+'</div>'):'<p class="vazio">💤 Notebook desligado. Ninguém nesta mesa agora.</p>';
-  } else if(k==='item'){ var pi=(D.producao||[])[v]; if(!pi){fechar();return;} t='⚙️ Na esteira'; c=cardProd(pi);
-  } else if(k==='van'){ t='🚚 Caminhão de entrega'; c=((D.entregas||[]).length?'<p class="vazio">Rota na ordem das casas:</p>'+D.entregas.map(cardEnt).join(''):'<p class="vazio">Caminhão na garagem. Nenhum pedido a caminho.</p>')+'<div class="acoes">'+nav('🚚 Abrir rastreio','rastreio')+nav('🏷️ Etiquetas','etiquetas')+'</div>';
-  } else if(k==='casa'){ var ec=(D.entregas||[])[v]; t='🏠 Casa do cliente'; c=ec?cardEnt(ec):'<p class="vazio">Nenhuma entrega para esta casa agora.</p>';
-  } else if(k==='zona'){ var z=(D.zonas||[])[v]; t='📦 Estoque · '+(z?z.nome:'vazio');
-    c=z?((z.materiais||[]).map(function(m){return '<div class="ev">'+(m.repor&&!D.publico?'⚠️':'📦')+' <b>'+esc(m.material)+'</b> · tem '+esc(m.qtd)+' '+esc(m.unidade)+(m.repor&&!D.publico?' · comprar '+esc(m.comprar):'')+'</div>';}).join('')||'<p class="vazio">Nenhum material ligado a esta categoria. No painel, em Estoque, escreva o nome da categoria em "Usado em".</p>'):'<p class="vazio">Prateleira livre.</p>';
-    c+='<div class="acoes">'+nav('🏭 Abrir estoque','estoque')+'</div>';
-  } else if(k==='tv'){ var nn=D.numeros; t='📊 Painel da diretoria';
-    c=linha('Pedidos hoje',nn.hoje)+(nn.fat?linha('Faturamento hoje',nn.fat):'')+linha('Esperando autorização',nn.novos)+linha('Na produção',nn.producao)+linha('A caminho',nn.caminho)+linha('Entregues em 7 dias',nn.entregues)
-     +(D.publico?'':linha('Atrasados',nn.atrasados)+linha('Materiais para repor',nn.repor))
-     +'<h4>Últimos acontecimentos</h4>'+((D.eventos||[]).map(function(x){return '<div class="ev">'+esc(x)+'</div>';}).join('')||'<p class="vazio">Nada ainda.</p>')+'<div class="acoes">'+nav('📊 Abrir resumo','resumo')+'</div>';
-  } else if(k==='sala'){ var S=SALAS.filter(function(s){return s.id===v;})[0]; if(!S){fechar();return;} t=S.rot;
-    c='<h4>Quem está aqui</h4>'+listaPessoas(function(P){var s=salaDe(P.g.position); return P.g.visible&&s&&s.id===v;});
-    if(v==='Diretoria') c+='<h4>Esperando autorização</h4>'+((D.novos||[]).map(cardNovo).join('')||'<p class="vazio">Nenhum.</p>');
-    if(v==='Produção') c+='<h4>Na esteira</h4>'+((D.producao||[]).map(cardProd).join('')||'<p class="vazio">Esteira parada.</p>');
-    if(v==='Garagem') c+='<h4>Entregas</h4>'+((D.entregas||[]).map(cardEnt).join('')||'<p class="vazio">Nenhuma.</p>');
-    c+='<div class="acoes">'+nav('Abrir no painel',S.nav)+'</div>';
-  } else if(k==='loja'){ t={'Padaria':'🥐 Padaria','Mercado':'🛒 Mercado','Shopping':'🛍️ Shopping'}[v]||v;
-    c='<p class="vazio">Aqui a equipe gasta as moedinhas no almoço, nas folgas e nas compras.</p><h4>Quem está aqui</h4>'+listaPessoas(function(P){return P.lugar&&P.lugar.loja===v&&!(P.rota&&P.rota.length);});
-  } else if(k==='lar'){ t=v==='__apt__'?'🏢 Prédio de apartamentos':(v==='__dono__'?'🏡 A sua casa':'🏠 Casa');
-    c='<h4>Moradores</h4>'+listaPessoas(function(P){var L=P.lugar; return L&&L.casa===v;})+'<div class="motivo">A luz fica acesa quando tem alguém acordado em casa.</div>';
-  } else { fechar(); return; }
-  popAberto=[k,v];
-  popEl.innerHTML='<div class="cab"><b>'+esc(t)+'</b><button class="x" data-fechar="1" title="Fechar">✕</button></div><div class="corpo">'+c+'</div>';
-  popEl.style.display='block';
-}
-function fechar(){ popAberto=null; popEl.style.display='none'; }
-function aviso(txt){ avisoEl.textContent=txt; avisoEl.style.display='block'; clearTimeout(aviso.t); aviso.t=setTimeout(function(){avisoEl.style.display='none';},2600); }
-function acionar(chave){
-  try{ var b=window.parent.document.querySelector('.st-key-'+chave+' button'); if(b){ b.click(); aviso('✅ Feito! Atualizando a cidade…'); fechar(); return; } }catch(e){}
-  aviso('Não deu para fazer por aqui. Abra o painel e tente de novo.');
-}
-popEl.addEventListener('click',function(e){ var b=e.target.closest('[data-key],[data-fechar],[data-pessoa]'); if(!b) return;
-  if(b.getAttribute('data-fechar')) fechar(); else if(b.getAttribute('data-pessoa')!=null) abrir('p',b.getAttribute('data-pessoa')); else acionar(b.getAttribute('data-key')); });
-
-// ================================================================ CÂMERA
-var CAMS={fabrica:[V(8,15,30),V(0,5,-5)],cidade:[V(10,85,110),V(0,0,4)]};
-document.getElementById('barra').addEventListener('click',function(e){ var b=e.target.closest('button'); if(!b) return; var m=b.getAttribute('data-cam');
-  if(m==='nomes'){mostrarNomes=!mostrarNomes; rot.domElement.classList.toggle('sem-nomes',!mostrarNomes); return;}
-  camModo=m; if(CAMS[m]){voarPara(CAMS[m][0],CAMS[m][1]); camModo='livre';} });
-var voo=null;
-function voarPara(pos,alvo){voo={p0:cam.position.clone(),t0:ctl.target.clone(),p1:pos,t1:alvo,t:0};}
-function seguir(dt){
-  if(voo){voo.t=Math.min(1,voo.t+dt*1.2); var s=voo.t*voo.t*(3-2*voo.t); cam.position.lerpVectors(voo.p0,voo.p1,s); ctl.target.lerpVectors(voo.t0,voo.t1,s); if(voo.t>=1) voo=null; return;}
-  var alvo=null; if(camModo==='dono'&&pessoas['__dono__']) alvo=pessoas['__dono__'].g.position; if(camModo==='caminhao') alvo=CAM.position;
-  if(alvo){ var dif=tmp.copy(alvo).add(V(0,1.5,0)).sub(ctl.target); ctl.target.add(dif); cam.position.add(dif); }
-}
-voarPara(CAMS.fabrica[0],CAMS.fabrica[1]);
-
-// ================================================================ LAÇO PRINCIPAL
-var ult=performance.now(), acumLuz=0;
-function laco(t){
-  requestAnimationFrame(laco);
-  var dt=Math.min(.06,(t-ult)/1000); ult=t;
-  try{ if(window.frameElement&&window.frameElement.getClientRects().length===0) return; }catch(e){}
-  seguir(dt); ctl.update();
-  Object.keys(pessoas).forEach(function(k){var P=pessoas[k]; atualizarPessoa(P,dt); P.rotN.visible=P.rotM.visible=P.g.visible;});
-  atualizarCaminhao(dt); animarEsteira(dt);
-  acumLuz+=dt; if(acumLuz>.25){atualizarLuzes(acumLuz); acumLuz=0;}
-  ZONAS3D.forEach(function(Z){ if(Z.alerta.visible) Z.alerta.material.emissiveIntensity=.5+Math.sin(t/200)*.5; });
-  CLIENTES3D.forEach(function(c){ if(c.pino.visible) c.pino.position.y=7+Math.sin(t/300)*.3; });
-  BOLO.rotation.y+=dt*.5;
-  renderer.render(scene,cam); rot.render(scene,cam);
-}
-requestAnimationFrame(laco);
-
-// ================================================================ LIGAR COM O PAINEL
-try{ var Pai=window.parent; Pai.__mcFrames=(Pai.__mcFrames||[]).filter(function(w){try{return w&&!w.closed&&w.document&&w.frameElement&&w.frameElement.isConnected;}catch(e){return false;}}); Pai.__mcFrames.push(window); if(Pai.__mcDados) mcAtualizar(Pai.__mcDados); }catch(e){}
-</script>
-</body></html>
-"""
+            _chat_cliente_parado(conv)
 
 
 # ===============================================================
@@ -3079,12 +2451,27 @@ try{ var Pai=window.parent; Pai.__mcFrames=(Pai.__mcFrames||[]).filter(function(
 # ===============================================================
 @st.dialog("Acesso do administrador")
 def abrir_login_admin():
+    if not SENHA_ADMIN:
+        st.error("A senha do painel ainda não foi configurada. No site do Streamlit, abra Settings > Secrets "
+                 "e coloque a linha SENHA_ADMIN = \"sua-senha\".")
+        return
+    bloqueado = st.session_state.get("login_bloqueado_ate", 0) - time.time()
+    if bloqueado > 0:
+        st.error(f"Muitas tentativas erradas. Espere {int(bloqueado // 60) + 1} minuto(s) e tente de novo.")
+        return
     senha = st.text_input("Senha", type="password", key="senha_admin")
     if st.button("Entrar", type="primary", key="btn_entrar_admin"):
-        if senha == SENHA_ADMIN:
+        if hmac.compare_digest(senha.encode("utf-8"), SENHA_ADMIN.encode("utf-8")):
             st.session_state.admin = True
+            st.session_state.login_erros = 0
             st.rerun()
         else:
+            erros = st.session_state.get("login_erros", 0) + 1
+            st.session_state.login_erros = erros
+            if erros >= 5:  # 5 erros seguidos: bloqueia por 5 minutos
+                st.session_state.login_bloqueado_ate = time.time() + 300
+                st.session_state.login_erros = 0
+            time.sleep(1)  # deixa mais lento quem tenta adivinhar a senha
             st.error("Senha incorreta.")
 
 
@@ -3117,7 +2504,7 @@ h1, h2, h3, h4, h5, h6, p, span, label, li, div { color: #1f2937; }
     width: 100%; justify-content: flex-start !important; text-align: left;
     background: #f8fafc !important; color: #1f2937 !important;
     border: 1px solid #e2e8f0 !important; border-radius: 10px !important;
-    padding: 2px 10px !important; min-height: 0 !important; height: clamp(30px, calc((100vh - 200px) / 19), 52px); font-weight: 600 !important; box-shadow: none !important; }
+    padding: 2px 10px !important; min-height: 0 !important; height: clamp(28px, calc((100vh - 200px) / 20), 52px); font-weight: 600 !important; box-shadow: none !important; }
 .st-key-menu_admin .stButton > button div { justify-content: flex-start !important; }
 .st-key-menu_admin .stButton > button p { color: inherit !important; font-size: clamp(.8rem, 1.7vh, .98rem); margin: 0 !important; line-height: 1.1; }
 .st-key-menu_admin .stButton > button:hover { background: #ede9fe !important; border-color: #8b5cf6 !important; }
@@ -3210,13 +2597,95 @@ def ir_secao(destino: str):
     st.session_state.secao_admin = destino
 
 
+@st.fragment(run_every=15)
+def aviso_chat_admin():
+    """Roda a cada 15 s em qualquer tela do painel: marca você como online e avisa se tem cliente esperando."""
+    marcar_dono_online()
+    if not LOJA.get("chat_ligado", True):
+        return
+    r = resumo_conversas()
+    esperando = r[r["esperando"]] if len(r) else r
+    n = len(esperando)
+    if n > st.session_state.get("chat_esperando_antes", 0):
+        st.toast(f"💬 {n} cliente(s) esperando resposta no chat!", icon="🔔")
+    st.session_state.chat_esperando_antes = n
+    if n and st.session_state.get("secao_admin") != "💬 Chat ao vivo":
+        c1, c2 = st.columns([4, 1])
+        c1.info(f"💬 {n} cliente(s) esperando resposta no chat: " + ", ".join(esperando["nome"].head(4).tolist()))
+        if c2.button("Responder", key="aviso_chat", type="primary", use_container_width=True):
+            st.session_state.secao_admin = "💬 Chat ao vivo"
+            st.rerun(scope="app")
+
+
+def _responder_chat(conv: str):
+    texto = st.session_state.get(f"resp_{conv}", "").strip()
+    st.session_state[f"resp_{conv}"] = ""
+    if texto:
+        if not _em_atendimento(conv):  # você puxou a conversa: ela vira atendimento com pessoa
+            gravar_msg(conv, "sistema", "chamou_atendente")
+        gravar_msg(conv, "loja", texto, LOJA.get("chat_nome_atendente") or "Atendente")
+
+
+def _encerrar_chat(conv: str):
+    gravar_msg(conv, "sistema", "encerrado")
+
+
+@st.fragment(run_every=5)
+def painel_conversas():
+    """Lista de conversas e a conversa aberta. Atualiza sozinha a cada 5 segundos."""
+    marcar_dono_online()
+    r = resumo_conversas()
+    if r.empty:
+        st.info("Nenhuma conversa ainda. Quando um cliente usar o chat da loja, ele aparece aqui.")
+        return
+    so_esperando = st.toggle("Mostrar só quem está esperando resposta", key="chat_so_esp")
+    lista = r[r["esperando"]] if so_esperando else r
+    if lista.empty:
+        st.success("✅ Ninguém esperando resposta.")
+        return
+    rotulos = {row["conversa"]: (("🔴 " if row["esperando"] else ("🙋 " if row["humano"] else "🤖 "))
+                                 + f"{row['nome']} · {row['data']} · {str(row['ultima'])[:40]}")
+               for _, row in lista.head(60).iterrows()}
+    conv = st.selectbox("Conversa", list(rotulos), format_func=lambda c: rotulos[c], key="chat_conv_sel")
+    st.caption("🔴 esperando você · 🙋 falando com pessoa · 🤖 só com o assistente")
+    msgs = mensagens_chat(conv)
+    with st.container(height=380, border=True):
+        for _, m in msgs.iterrows():
+            if m["quem"] == "sistema":
+                aviso = "🙋 Cliente pediu para falar com uma pessoa" if m["texto"] == "chamou_atendente" \
+                    else "✅ Atendimento encerrado (voltou para o assistente)"
+                st.caption(f"{m['data']} · {aviso}")
+                continue
+            papel, avatar = QUEM_CHAT.get(m["quem"], ("assistant", "🤖"))
+            with st.chat_message(papel, avatar=avatar):
+                quem = {"cliente": m["nome"] or "Cliente", "robo": "Assistente automático",
+                        "loja": m["nome"] or "Você"}.get(m["quem"], "")
+                st.caption(f"{quem} · {m['data']}")
+                st.markdown(html.escape(m["texto"]).replace("\n", "  \n"))
+    with st.form(f"form_resp_{conv}", border=False):
+        st.text_area("Sua resposta", key=f"resp_{conv}", height=80, placeholder="Escreva a resposta para o cliente...")
+        st.form_submit_button("📨 Enviar resposta", type="primary", use_container_width=True,
+                              on_click=_responder_chat, args=(conv,))
+    linha = r[r["conversa"] == conv].iloc[0]
+    if linha["humano"]:
+        st.button("✅ Encerrar atendimento", key=f"enc_{conv}", use_container_width=True,
+                  on_click=_encerrar_chat, args=(conv,), help="A conversa volta para o assistente automático")
+    cli = ler_csv(ARQ_CLIENTES, COLUNAS_CLIENTES)
+    nome_c = str(linha["nome"])
+    achado = cli[cli["nome"].str.lower() == nome_c.lower()] if nome_c and nome_c != "Visitante" else cli.iloc[0:0]
+    if len(achado):
+        num = "".join(ch for ch in str(achado.iloc[0]["telefone"]) if ch.isdigit())
+        st.link_button(f"💬 Continuar no WhatsApp com {nome_c}", f"https://wa.me/{numero_wpp(num)}",
+                       use_container_width=True)
+
+
 # ===============================================================
 # PAINEL DO ADMINISTRADOR
 # ===============================================================
 SECOES_ADMIN = {
-    "VISÃO GERAL": ["📊 Resumo", "🏙️ Empresa ao vivo"],
+    "VISÃO GERAL": ["📊 Resumo", "🔨 Mesa do chefe"],
     "CATÁLOGO": ["📦 Produtos", "🖼️ Fotos", "🎨 Galeria de artes"],
-    "VENDAS": ["👥 Clientes", "🧾 Pedidos", "🚚 Rastreio", "🏷️ Etiquetas", "🖨️ Artes", "📄 Nota fiscal", "📍 Frete"],
+    "VENDAS": ["💬 Chat ao vivo", "👥 Clientes", "🧾 Pedidos", "🚚 Rastreio", "🏷️ Etiquetas", "🖨️ Artes", "📄 Nota fiscal", "📍 Frete"],
     "COMPRAS": ["🏭 Estoque e compras"],
     "MARKETING": ["🏢 Apresentações", "🎬 Vitrine", "👁️ Interesse"],
     "CONFIGURAÇÃO": ["🎨 Loja e redes", "💾 Backup"],
@@ -3251,82 +2720,15 @@ if st.session_state.admin:
         av2.button("📦 Ver e repor", key="aviso_estoque", type="primary", use_container_width=True,
                    on_click=ir_secao, args=("🏭 Estoque e compras",))
 
-    # ----- Mini fábrica: grande nesta seção, janela flutuante (arrastável) nas outras -----
-    if secao != "🏙️ Empresa ao vivo":
-        if LOJA.get("mini_no_painel", True):
-            mini_cidade("admin")
-        else:
-            esconder_cidade()
+    # ----- Chat: você aparece online enquanto o painel está aberto, e vê quem está esperando -----
+    if not URL_BANCO:
+        st.warning("⚠️ Banco de dados não configurado: os dados estão ficando em arquivos e podem sumir quando o "
+                   "app reiniciar. Coloque o endereço do Supabase nos Secrets do Streamlit.")
+    aviso_chat_admin()
 
-    # ---------------------------------------------------------- EMPRESA AO VIVO (mini fábrica)
-    if secao == "🏙️ Empresa ao vivo":
-        st.caption("Sua empresa em miniatura, trabalhando com os pedidos de verdade. Clique em qualquer coisa: "
-                   "pessoas, salas, painel da parede, esteira, prateleiras, van e casas dos clientes.")
-        mini_cidade("painel")
-        components.html(MOTOR_CIDADE, height=680)  # a cidade 3D (recebe os dados sozinha, sem recarregar)
-        st.caption("🖱️ Arraste para girar · rodinha para aproximar · botão direito para arrastar a cena. "
-                   "Clique em qualquer coisa: pessoas, notebooks, painel da parede, prateleiras, caminhão, casas e lojas.")
-        with st.expander("🕐 Horário, salários e o meu boneco"):
-            with st.form("form_cidade"):
-                h1, h2, h3 = st.columns(3)
-                c_ini = h1.number_input("Expediente começa (hora)", 0, 23, int(LOJA.get("exp_inicio", 8)))
-                c_fim = h2.number_input("Expediente termina (hora)", 1, 24, int(LOJA.get("exp_fim", 18)))
-                c_alm = h3.number_input("Almoço (hora, dura 1 h)", 0, 23, int(LOJA.get("exp_almoco", 12)))
-                nomes_dias = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
-                c_dias = st.multiselect("Dias de trabalho", nomes_dias,
-                                        default=[nomes_dias[i] for i in LOJA.get("exp_dias", [0, 1, 2, 3, 4])])
-                c_sal = st.number_input("Salário por hora da equipe (moedas 🪙 de mentirinha)", 1.0, 500.0,
-                                        float(LOJA.get("cidade_salario_hora", 15)), 1.0)
-                st.markdown("**👤 O meu boneco**")
-                dono = dict(DONO_PADRAO, **LOJA.get("dono", {}))
-                d1, d2, d3, d4, d5 = st.columns(5)
-                d_nome = d1.text_input("Nome", dono["nome"])
-                d_pele = d2.selectbox("Pele", list(TONS_PELE), index=list(TONS_PELE).index(dono["pele"]) if dono["pele"] in TONS_PELE else 2)
-                d_cab = d3.selectbox("Cabelo", list(CORES_CABELO), index=list(CORES_CABELO).index(dono["cabelo"]) if dono["cabelo"] in CORES_CABELO else 1)
-                d_est = d4.selectbox("Estilo", ESTILOS_CABELO, index=ESTILOS_CABELO.index(dono["estilo"]) if dono["estilo"] in ESTILOS_CABELO else 0)
-                d_cam = d5.color_picker("Camisa", dono["camisa"])
-                if st.form_submit_button("💾 Salvar", type="primary"):
-                    LOJA.update({"exp_inicio": int(c_ini), "exp_fim": int(c_fim), "exp_almoco": int(c_alm),
-                                 "exp_dias": [nomes_dias.index(x) for x in c_dias], "cidade_salario_hora": float(c_sal),
-                                 "dono": {"nome": d_nome.strip() or "Você", "pele": d_pele, "cabelo": d_cab,
-                                          "estilo": d_est, "camisa": d_cam}})
-                    gravar_loja(LOJA)
-                    st.rerun()
-            st.caption("As moedas 🪙 são de mentirinha e não mexem no dinheiro real da loja. A equipe ganha por hora de "
-                       "expediente e um bônus quando a loja vende de verdade. Você (o dono) ganha uma parte do lucro.")
-        with st.expander("👥 Minha equipe (nomes reais, setores e aparência dos bonequinhos)"):
-            st.caption("Cada pessoa aparece no setor escolhido. Camisa: cor em código (ex.: #2563eb). "
-                       "Desmarque 'Ativo' para tirar alguém da fábrica sem apagar.")
-            eq_df = pd.DataFrame(carregar_equipe())
-            for c in ["nome", "cargo", "setor", "pele", "cabelo", "estilo", "camisa", "ativo"]:
-                if c not in eq_df.columns:
-                    eq_df[c] = True if c == "ativo" else ""
-            eq_edit = st.data_editor(
-                eq_df[["nome", "cargo", "setor", "pele", "cabelo", "estilo", "camisa", "ativo"]],
-                num_rows="dynamic", use_container_width=True, key="editor_equipe",
-                column_config={
-                    "nome": st.column_config.TextColumn("Nome", required=True),
-                    "cargo": st.column_config.TextColumn("Cargo"),
-                    "setor": st.column_config.SelectboxColumn("Setor", options=SETORES, required=True),
-                    "pele": st.column_config.SelectboxColumn("Tom de pele", options=list(TONS_PELE)),
-                    "cabelo": st.column_config.SelectboxColumn("Cabelo", options=list(CORES_CABELO)),
-                    "estilo": st.column_config.SelectboxColumn("Estilo", options=ESTILOS_CABELO),
-                    "camisa": st.column_config.TextColumn("Cor da camisa"),
-                    "ativo": st.column_config.CheckboxColumn("Ativo"),
-                })
-            q1, q2 = st.columns(2)
-            if q1.button("💾 Salvar equipe", type="primary", key="salvar_equipe"):
-                lista = eq_edit.dropna(subset=["nome"]).fillna("").to_dict("records")
-                for m in lista:
-                    m["ativo"] = bool(m.get("ativo", True))
-                gravar_json(ARQ_EQUIPE, lista)
-                st.rerun()
-            novo_mini = q2.toggle("Mostrar a janela flutuante nas outras telas do painel",
-                                  value=bool(LOJA.get("mini_no_painel", True)), key="tg_mini_painel")
-            if novo_mini != bool(LOJA.get("mini_no_painel", True)):
-                LOJA["mini_no_painel"] = novo_mini
-                gravar_loja(LOJA)
-                st.rerun()
+    # ---------------------------------------------------------- MESA DO CHEFE
+    if secao == "🔨 Mesa do chefe":
+        st.caption("Aprove os pedidos novos, mande para a produção e marque o que já foi enviado e entregue.")
         pedidos_v = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
         s1, s2, s3, s4 = st.columns(4)
         with s1, st.container(border=True):
@@ -3337,7 +2739,7 @@ if st.session_state.admin:
             st.button("Ver interesse", key="mini_int", use_container_width=True,
                       on_click=ir_secao, args=("👁️ Interesse",))
         with s2, st.container(border=True):
-            st.markdown("**🔨 Mesa do chefe**")
+            st.markdown("**✅ Esperando aprovação**")
             novos_v = pedidos_v[pedidos_v["status"] == "Novo"]
             if novos_v.empty:
                 st.success("Nenhum pedido esperando.")
@@ -3372,6 +2774,101 @@ if st.session_state.admin:
                       on_click=ir_secao, args=("🏷️ Etiquetas",))
             st.button("📦 Estoque", key="mini_est", use_container_width=True,
                       on_click=ir_secao, args=("🏭 Estoque e compras",))
+    # ---------------------------------------------------------- CHAT AO VIVO
+    elif secao == "💬 Chat ao vivo":
+        p = _presenca()
+        c1, c2 = st.columns([2, 3])
+        disp = c1.toggle("🟢 Aparecer online para os clientes", value=p["disponivel"], key="chat_disp",
+                         help="Desligue quando não puder responder. Com o painel fechado, você aparece offline.")
+        p["disponivel"] = disp
+        bola, situacao = _status_atendimento()
+        c2.info(f"O cliente vê agora: {bola} **{situacao}** · Expediente: {texto_horario()}")
+        t_conv, t_perg, t_msgs, t_wpp = st.tabs(["💬 Conversas", "❓ Perguntas rápidas", "🤖 Mensagens e horário",
+                                                 "📱 WhatsApp"])
+        with t_conv:
+            painel_conversas()
+        with t_perg:
+            st.caption("Estas são as caixinhas de pergunta que o cliente toca no chat. Em 'Palavras-chave', escreva "
+                       "as palavras que o cliente pode usar (separadas por vírgula): o assistente usa elas para "
+                       "achar a resposta quando o cliente escreve a dúvida com as próprias palavras. "
+                       "Na resposta você pode usar {horario}, {frete_gratis}, {loja}, {link} e {whatsapp}.")
+            perg_df = pd.DataFrame(LOJA.get("chat_perguntas", []), columns=["pergunta", "palavras", "resposta"])
+            perg_ed = st.data_editor(perg_df, num_rows="dynamic", use_container_width=True, key="editor_perguntas",
+                                     column_config={
+                                         "pergunta": st.column_config.TextColumn("Caixinha (o que o cliente vê)",
+                                                                                 required=True, max_chars=40),
+                                         "palavras": st.column_config.TextColumn("Palavras-chave", width="medium"),
+                                         "resposta": st.column_config.TextColumn("Resposta automática", width="large",
+                                                                                 required=True)})
+            if st.button("💾 Salvar perguntas", type="primary", key="salvar_perguntas"):
+                LOJA["chat_perguntas"] = [{k: str(v).strip() for k, v in row.items()}
+                                          for row in perg_ed.fillna("").to_dict("records")
+                                          if str(row.get("pergunta", "")).strip() and str(row.get("resposta", "")).strip()]
+                gravar_loja(LOJA)
+                st.success("Perguntas salvas!")
+            st.markdown("**🧪 Testar o assistente**")
+            teste = st.text_input("Escreva uma pergunta como se fosse o cliente", key="teste_robo",
+                                  placeholder="ex.: quanto tempo demora pra chegar em SP?")
+            if teste.strip():
+                st.write("🤖 " + (resposta_automatica(teste) or preencher(LOJA["chat_nao_entendi"])))
+        with t_msgs, st.form("form_chat_msgs"):
+            m_lig = st.checkbox("Mostrar o chat na loja", value=bool(LOJA.get("chat_ligado", True)))
+            h1, h2, h3 = st.columns([1, 1, 2])
+            hi, mi = _hora(LOJA.get("exp_inicio"), "08:00")
+            hf, mf = _hora(LOJA.get("exp_fim"), "18:00")
+            from datetime import time as hora_do_dia
+            m_ini = h1.time_input("Atendimento começa", hora_do_dia(hi, mi), step=1800)
+            m_fim = h2.time_input("Atendimento termina", hora_do_dia(hf, mf), step=1800)
+            m_dias = h3.multiselect("Dias de atendimento", DIAS_SEMANA,
+                                    default=[DIAS_SEMANA[int(d)] for d in LOJA.get("exp_dias", [0, 1, 2, 3, 4])])
+            m_nome = st.text_input("Seu nome no chat (aparece quando você responde)",
+                                   value=LOJA.get("chat_nome_atendente", ""), placeholder="ex.: João, da loja")
+            st.caption("Você pode usar {loja}, {horario}, {link}, {whatsapp} e {frete_gratis} nas mensagens.")
+            m_boas = st.text_area("👋 Boas-vindas (primeira mensagem do chat)", LOJA["chat_boas_vindas"])
+            m_res = st.text_area("✅ Depois de uma resposta automática", LOJA["chat_resolveu"])
+            m_nao = st.text_area("🤔 Quando o assistente não entende", LOJA["chat_nao_entendi"])
+            m_cham = st.text_area("🙋 Quando o cliente chama uma pessoa e você está online", LOJA["chat_chamando"])
+            m_off = st.text_area("⚪ No horário de atendimento, mas você está offline", LOJA["chat_offline"])
+            m_fora = st.text_area("🌙 Fora do horário de atendimento", LOJA["chat_fora_expediente"])
+            if st.form_submit_button("💾 Salvar mensagens e horário", type="primary"):
+                LOJA.update({"chat_ligado": m_lig, "exp_inicio": m_ini.strftime("%H:%M"),
+                             "exp_fim": m_fim.strftime("%H:%M"), "exp_dias": [DIAS_SEMANA.index(d) for d in m_dias],
+                             "chat_nome_atendente": m_nome.strip(), "chat_boas_vindas": m_boas,
+                             "chat_resolveu": m_res, "chat_nao_entendi": m_nao, "chat_chamando": m_cham,
+                             "chat_offline": m_off, "chat_fora_expediente": m_fora})
+                gravar_loja(LOJA)
+                st.rerun()
+        with t_wpp:
+            st.markdown("""
+**Respostas automáticas no WhatsApp** (precisa do app **WhatsApp Business**, que é gratuito)
+
+O WhatsApp não deixa a loja responder por você, mas o próprio WhatsApp Business faz isso sozinho. Configure uma vez:
+1. No WhatsApp Business, toque nos **três pontinhos > Ferramentas comerciais**.
+2. **Mensagem de saudação**: ative e cole o texto 1. Ela vai para quem chama pela primeira vez.
+3. **Mensagem de ausência**: ative, escolha **Fora do horário comercial** e cole o texto 2.
+4. Em **Perfil comercial > Horário comercial**, coloque o mesmo horário do chat.
+5. **Respostas rápidas**: cadastre os atalhos do texto 3. Na conversa, digite **/** e escolha a resposta.
+""")
+            with st.form("form_wpp"):
+                w_sau = st.text_area("Texto 1: saudação (pode usar {loja}, {link}, {horario})", LOJA["wpp_saudacao"],
+                                     height=150)
+                w_aus = st.text_area("Texto 2: ausência (pode usar {loja}, {link}, {horario})", LOJA["wpp_ausencia"],
+                                     height=170)
+                if st.form_submit_button("💾 Salvar textos do WhatsApp", type="primary"):
+                    LOJA.update({"wpp_saudacao": w_sau, "wpp_ausencia": w_aus})
+                    gravar_loja(LOJA)
+                    st.rerun()
+            if not LOJA.get("link_loja"):
+                st.warning("Coloque o endereço da loja em 🎨 Loja e redes para o {link} sair certo.")
+            st.markdown("**Texto 1 pronto para copiar** (toque no ícone de copiar, no canto)")
+            st.code(preencher(LOJA["wpp_saudacao"]), language=None)
+            st.markdown("**Texto 2 pronto para copiar**")
+            st.code(preencher(LOJA["wpp_ausencia"]), language=None)
+            st.markdown("**Texto 3: respostas rápidas** (as mesmas perguntas do chat)")
+            for n, pq in enumerate(LOJA.get("chat_perguntas", []), start=1):
+                atalho = "/" + (_normal(pq["pergunta"]).split() or [f"r{n}"])[0][:12]
+                st.caption(f"Atalho {atalho}")
+                st.code(preencher(pq["resposta"]), language=None)
     # ---------------------------------------------------------- RESUMO (dashboard)
     elif secao == "📊 Resumo":
         clientes_r = ler_csv(ARQ_CLIENTES, COLUNAS_CLIENTES)
@@ -3384,7 +2881,7 @@ if st.session_state.admin:
         ticket = faturamento / len(validos) if len(validos) else 0.0
 
         # Atalhos rápidos (botões clicáveis)
-        atalhos = [("🏙️ Empresa ao vivo", "🏙️ Empresa ao vivo"), ("➕ Novo produto", "📦 Produtos"),
+        atalhos = [("🔨 Mesa do chefe", "🔨 Mesa do chefe"), ("➕ Novo produto", "📦 Produtos"),
                    ("🧾 Ver pedidos", "🧾 Pedidos"), ("🚚 Rastrear envios", "🚚 Rastreio"),
                    ("💾 Fazer backup", "💾 Backup")]
         for col, (rotulo, destino) in zip(st.columns(len(atalhos)), atalhos):
@@ -3786,7 +3283,21 @@ if st.session_state.admin:
                 else:
                     salvar = cli_editado.copy()
                     salvar["aceita_promocoes"] = salvar["aceita_promocoes"].astype(str)
-                    gravar_csv(ARQ_CLIENTES, salvar)
+                    with trava():
+                        # Clientes que chegaram pela loja enquanto você editava não são apagados
+                        agora_cli = ler_csv(ARQ_CLIENTES, COLUNAS_CLIENTES)
+                        tels_vistos = set(clientes["telefone"].astype(str))
+                        novos_cli = agora_cli[~agora_cli["telefone"].astype(str).isin(tels_vistos)]
+                        # e quem fez pedido nesse meio tempo mantém a contagem de pedidos certa
+                        qtd_agora = dict(zip(agora_cli["telefone"].astype(str), agora_cli["qtd_pedidos"]))
+                        ult_agora = dict(zip(agora_cli["telefone"].astype(str), agora_cli["ultimo_contato"]))
+                        qtd_antes = dict(zip(clientes["telefone"].astype(str), clientes["qtd_pedidos"]))
+                        for idx, cli_l in salvar.iterrows():
+                            tel = str(cli_l["telefone"])
+                            if tel in qtd_agora and str(qtd_agora[tel]) != str(qtd_antes.get(tel, "")):
+                                salvar.at[idx, "qtd_pedidos"] = qtd_agora[tel]
+                                salvar.at[idx, "ultimo_contato"] = ult_agora.get(tel, "")
+                        gravar_csv(ARQ_CLIENTES, pd.concat([salvar, novos_cli], ignore_index=True))
                     st.rerun()
             emails = ",".join(e for e in clientes["email"].astype(str) if "@" in e)
             if emails:
@@ -3858,15 +3369,26 @@ if st.session_state.admin:
             })
         b1, b2 = st.columns(2)
         if b1.button("💾 Salvar pedidos", type="primary", key="salvar_pedidos"):
-            completo = pedidos.drop(columns=["total_num"]).copy()
-            antes_st = dict(zip(completo["id_pedido"], completo["status"]))
-            for _, linha in ped_editado.iterrows():
-                alvo = completo["id_pedido"] == linha["id_pedido"]
-                for campo in ["email", "status", "pagamento", "forma_pagamento", "obs_internas"]:
-                    completo.loc[alvo, campo] = linha[campo]
-            gravar_csv(ARQ_PEDIDOS, completo)
-            for _, linha in ped_editado.iterrows():
-                depois_de_mudar_status(linha["id_pedido"], antes_st.get(linha["id_pedido"]), linha["status"])
+            # Lê a lista na hora (dentro da trava) e só muda o que você mexeu:
+            # pedidos novos que chegaram enquanto você editava continuam lá
+            original = pedidos.set_index("id_pedido")
+            with trava():
+                completo = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
+                antes_st = dict(zip(completo["id_pedido"], completo["status"]))
+                mudados = []
+                for _, linha in ped_editado.iterrows():
+                    pid = linha["id_pedido"]
+                    if pid not in original.index:
+                        continue
+                    alvo = completo["id_pedido"] == pid
+                    for campo in ["email", "status", "pagamento", "forma_pagamento", "obs_internas"]:
+                        if str(linha[campo]) != str(original.at[pid, campo]):
+                            completo.loc[alvo, campo] = linha[campo]
+                            mudados.append(pid)
+                gravar_csv(ARQ_PEDIDOS, completo)
+                for pid in set(mudados):
+                    novo_st = completo.loc[completo["id_pedido"] == pid, "status"].iloc[0]
+                    depois_de_mudar_status(pid, antes_st.get(pid), novo_st)
             st.rerun()
         b2.download_button("⬇️ Baixar pedidos (CSV)",
                            pedidos.drop(columns=["total_num"]).to_csv(index=False).encode("utf-8"),
@@ -3907,13 +3429,9 @@ if st.session_state.admin:
                     r_link = st.text_input("Link de rastreio (vazio = site da transportadora)", value=ped["link_rastreio"])
                 salvar_r = st.form_submit_button("💾 Salvar rastreio", type="primary")
             if salvar_r:
-                alvo = pedidos["id_pedido"] == id_sel
-                for campo, valor in {"email": r_email, "status": r_status, "previsao_entrega": r_prev,
-                                     "transportadora": r_transp, "codigo_rastreio": r_cod.strip().upper(),
-                                     "link_rastreio": r_link.strip()}.items():
-                    pedidos.loc[alvo, campo] = valor
-                gravar_csv(ARQ_PEDIDOS, pedidos)
-                depois_de_mudar_status(id_sel, ped["status"], r_status)
+                atualizar_pedido(id_sel, {"email": r_email, "status": r_status, "previsao_entrega": r_prev,
+                                          "transportadora": r_transp, "codigo_rastreio": r_cod.strip().upper(),
+                                          "link_rastreio": r_link.strip()})
                 st.success("Rastreio salvo! O cliente já vê em Acompanhar meu pedido.")
                 st.rerun()
             link = ped["link_rastreio"] or TRANSPORTADORAS.get(ped["transportadora"], "") or LOJA.get("link_loja", "")
@@ -4050,21 +3568,19 @@ body {{ font-family: Arial, sans-serif; margin: 0; color: #000; }}
                         ", ".join(x for x in [dados["ent_rua"], dados["ent_numero"], dados["ent_complemento"],
                                               dados["ent_bairro"]] if x)
                         + f" - {dados['ent_cidade']}/{dados['ent_uf']} CEP {dados['ent_cep']}")
-                    alvo = pedidos["id_pedido"] == id_sel
-                    for campo, valor in dados.items():
-                        pedidos.loc[alvo, campo] = valor
-                    gravar_csv(ARQ_PEDIDOS, pedidos)
+                    atualizar_pedido(id_sel, dados)
                     # Guarda também no cadastro do cliente
-                    clientes = ler_csv(ARQ_CLIENTES, COLUNAS_CLIENTES)
-                    alvo_c = clientes["telefone"].astype(str) == str(ped["telefone"])
-                    if alvo_c.any():
-                        clientes.loc[alvo_c, "cep"] = dados["ent_cep"]
-                        clientes.loc[alvo_c, "endereco"] = ", ".join(
-                            x for x in [dados["ent_rua"], dados["ent_numero"], dados["ent_complemento"],
-                                        dados["ent_bairro"]] if x)
-                        clientes.loc[alvo_c, "cidade"] = dados["ent_cidade"]
-                        clientes.loc[alvo_c, "uf"] = dados["ent_uf"]
-                        gravar_csv(ARQ_CLIENTES, clientes)
+                    with trava():
+                        clientes = ler_csv(ARQ_CLIENTES, COLUNAS_CLIENTES)
+                        alvo_c = clientes["telefone"].astype(str) == str(ped["telefone"])
+                        if alvo_c.any():
+                            clientes.loc[alvo_c, "cep"] = dados["ent_cep"]
+                            clientes.loc[alvo_c, "endereco"] = ", ".join(
+                                x for x in [dados["ent_rua"], dados["ent_numero"], dados["ent_complemento"],
+                                            dados["ent_bairro"]] if x)
+                            clientes.loc[alvo_c, "cidade"] = dados["ent_cidade"]
+                            clientes.loc[alvo_c, "uf"] = dados["ent_uf"]
+                            gravar_csv(ARQ_CLIENTES, clientes)
                     st.rerun()
 
             with dir_:
@@ -4196,14 +3712,13 @@ body {{ margin: 0; font-family: Arial; }}
                 with st.container(border=True):
                     st.markdown(f"#### {a.get('quantidade', 1)}x {a.get('item', '')}")
                     col_a, col_b, col_c = st.columns([1, 1.2, 1.3])
-                    tem_foto = bool(a.get("arquivo")) and os.path.exists(a["arquivo"])
-                    bruto = b""
+                    bruto = ler_bin(a.get("arquivo")) or b""  # a foto agora vem do banco
+                    tem_foto = bool(bruto)
                     with col_a:
                         if tem_foto:
-                            st.image(a["arquivo"], caption=a.get("arte_nome") or "Arte", use_container_width=True)
-                            with open(a["arquivo"], "rb") as f:
-                                bruto = f.read()
-                            st.download_button("⬇️ Baixar arquivo original", bruto, os.path.basename(a["arquivo"]),
+                            st.image(bruto, caption=a.get("arte_nome") or "Arte", use_container_width=True)
+                            st.download_button("⬇️ Baixar arquivo original", bruto,
+                                               os.path.basename(a["arquivo"].replace("\\", "/")),
                                                key=f"orig_{id_sel}_{n}")
                         elif a.get("arquivo"):
                             st.warning("A foto não foi encontrada (o app pode ter reiniciado). "
@@ -4216,10 +3731,10 @@ body {{ margin: 0; font-family: Arial; }}
                         if a.get("obs"):
                             st.markdown(f"**Pedido do cliente:** {a['obs']}")
                         st.markdown(f"**Peça:** {a.get('cor_peca') or 'Branco'} · **Lado:** {a.get('lado') or 'Frente'}")
-                        if a.get("previa") and os.path.exists(a["previa"]):
+                        previa_html = ler_previa(a.get("previa"))
+                        if previa_html:
                             st.markdown("**Como o cliente montou:**")
-                            with open(a["previa"], encoding="utf-8") as f:
-                                components.html(f.read(), height=340)
+                            components.html(previa_html, height=340)
                     with col_b:
                         molde = st.selectbox("Molde", list(MOLDES_IMPRESSAO.keys()), key=f"molde_{id_sel}_{n}")
                         lw, lh = MOLDES_IMPRESSAO[molde]
@@ -4265,6 +3780,10 @@ body {{ margin: 0; font-family: Arial; }}
         nomes_forn = [n for n in forn["nome"].tolist() if n]
 
         def entrar_estoque(material: str, qtd: float, custo: float, fornecedor: str, ref: str):
+            with trava():
+                _entrar_estoque(material, qtd, custo, fornecedor, ref)
+
+        def _entrar_estoque(material: str, qtd: float, custo: float, fornecedor: str, ref: str):
             base = ler_csv(ARQ_ESTOQUE, COL_EST)
             base["quantidade"] = pd.to_numeric(base["quantidade"], errors="coerce").fillna(0.0)
             alvo = base["material"] == material
@@ -4346,7 +3865,8 @@ body {{ margin: 0; font-family: Arial; }}
                     "obs": st.column_config.TextColumn("Observações", width="large"),
                 })
             if st.button("💾 Salvar estoque", type="primary", key="salvar_estoque"):
-                gravar_csv(ARQ_ESTOQUE, est_edit)
+                with trava():
+                    gravar_csv(ARQ_ESTOQUE, est_edit)
                 st.rerun()
             st.markdown("**Lançar entrada ou saída rápida**")
             with st.form("mov_rapido", clear_on_submit=True):
@@ -4356,11 +3876,12 @@ body {{ margin: 0; font-family: Arial; }}
                 qtd = m3.number_input("Quantidade", min_value=0.0, value=1.0, step=1.0)
                 lancar = m4.form_submit_button("Lançar", type="primary")
             if lancar and mat:
-                base = ler_csv(ARQ_ESTOQUE, COL_EST)
-                base["quantidade"] = pd.to_numeric(base["quantidade"], errors="coerce").fillna(0.0)
-                sinal = 1 if tipo == "Entrada" else -1
-                base.loc[base["material"] == mat, "quantidade"] += sinal * qtd
-                gravar_csv(ARQ_ESTOQUE, base)
+                with trava():
+                    base = ler_csv(ARQ_ESTOQUE, COL_EST)
+                    base["quantidade"] = pd.to_numeric(base["quantidade"], errors="coerce").fillna(0.0)
+                    sinal = 1 if tipo == "Entrada" else -1
+                    base.loc[base["material"] == mat, "quantidade"] += sinal * qtd
+                    gravar_csv(ARQ_ESTOQUE, base)
                 registrar_movimento(mat, f"{tipo} (manual)", qtd)
                 st.rerun()
         with t_forn:
@@ -4649,11 +4170,9 @@ Na aba *Notas dos pedidos* existe um botão que gera a declaração pronta para 
                         if nf_ch and len(so_num) != 44:
                             st.error("A chave de acesso precisa ter 44 números.")
                         else:
-                            alvo = pedidos["id_pedido"] == id_sel
-                            for campo, valor in {"nf_status": nf_st, "nf_numero": nf_num.strip(), "nf_chave": so_num,
-                                                 "nf_link": nf_lk.strip(), "cpf_cnpj": nf_doc.strip()}.items():
-                                pedidos.loc[alvo, campo] = valor
-                            gravar_csv(ARQ_PEDIDOS, pedidos)
+                            atualizar_pedido(id_sel, {"nf_status": nf_st, "nf_numero": nf_num.strip(),
+                                                      "nf_chave": so_num, "nf_link": nf_lk.strip(),
+                                                      "cpf_cnpj": nf_doc.strip()})
                             st.rerun()
         with dados, st.form("form_fiscal"):
             st.caption("Esses dados aparecem na declaração de conteúdo e ajudam no emissor.")
@@ -4711,8 +4230,6 @@ Na aba *Notas dos pedidos* existe um botão que gera a declaração pronta para 
                 l_cor = c1.color_picker("Cor principal", value=LOJA["cor_principal"])
                 l_fundo = c2.selectbox("Fundo da página", FUNDOS,
                                        index=FUNDOS.index(LOJA["fundo"]) if LOJA["fundo"] in FUNDOS else 0)
-                l_mini = c1.checkbox("Mostrar a fábrica ao vivo (janela flutuante) na loja",
-                                     value=bool(LOJA.get("mostrar_mini", True)))
             with t2:
                 c1, c2 = st.columns([2, 1])
                 l_insta = c1.text_input("Link do Instagram", value=LOJA["instagram"],
@@ -4764,7 +4281,6 @@ Na aba *Notas dos pedidos* existe um botão que gera a declaração pronta para 
                 LOJA.update({
                     "nome_empresa": l_nome, "subtitulo": l_sub, "frase_banner": l_frase,
                     "whatsapp": "".join(ch for ch in l_wpp if ch.isdigit()), "cor_principal": l_cor, "fundo": l_fundo,
-                    "mostrar_mini": l_mini,
                     "instagram": l_insta.strip(), "facebook": l_face.strip(), "mostrar_redes": l_redes,
                     "twitter": l_tw.strip(),
                     "link_loja": l_link.strip(), "pix_chave": l_pix.strip(), "pix_nome": l_pixn.strip(),
@@ -4942,24 +4458,27 @@ Na aba *Notas dos pedidos* existe um botão que gera a declaração pronta para 
     elif secao == "💾 Backup":
         st.markdown("""
 **Como guardar tudo no seu computador**
-1. Clique em *Baixar backup completo*. Vem um arquivo `.zip` com a data no nome.
-2. Crie no computador uma pasta chamada **Backup da Loja** e guarde o arquivo lá.
-3. Faça isso toda semana. No Streamlit Cloud os dados podem sumir quando o app reinicia.
+1. Clique em *Preparar backup* e depois em *Baixar backup completo*. Vem um arquivo `.zip` com a data no nome.
+2. Guarde o arquivo numa pasta **Backup da Loja** (no computador, no celular ou no Google Drive).
+3. Faça isso uma vez por semana. Seus dados ficam no banco e não somem, mas uma cópia extra é sempre bom.
 
-O zip traz produtos, descrições, fotos, clientes, pedidos, frete, apresentações, vídeos e configurações.
-Dentro dele, a pasta *LEIA-ME* tem planilhas que abrem direto no Excel.
+O zip traz produtos, fotos, clientes, pedidos, **fotos e artes que os clientes enviaram**, conversas do chat,
+frete, apresentações e configurações. A pasta *LEIA-ME* tem planilhas que abrem direto no Excel.
 """)
-        nome_zip = f"backup_loja_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.zip"
-        st.download_button("⬇️ Baixar backup completo", gerar_backup_zip(), nome_zip, "application/zip",
-                           type="primary", use_container_width=True)
+        if st.button("📦 Preparar backup", key="bk_preparar", use_container_width=True):
+            with st.spinner("Juntando tudo..."):
+                st.session_state.bk_dados = gerar_backup_zip()
+                st.session_state.bk_nome = f"backup_loja_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.zip"
+        if st.session_state.get("bk_dados"):
+            st.download_button("⬇️ Baixar backup completo", st.session_state.bk_dados, st.session_state.bk_nome,
+                               "application/zip", type="primary", use_container_width=True)
         st.divider()
         st.markdown("**Restaurar um backup**")
         enviado = st.file_uploader("Envie o arquivo .zip do backup", type=["zip"], key="bk_zip")
         if enviado is not None and st.button("♻️ Restaurar agora (substitui os dados atuais)", key="bk_rest"):
             try:
                 qtd = restaurar_backup_zip(enviado)
-                st.success(f"{qtd} arquivo(s) restaurado(s).")
-                st.rerun()
+                st.success(f"✅ {qtd} arquivo(s) restaurado(s). Clique em qualquer seção do menu para ver os dados.")
             except Exception as erro:
                 st.error(f"Não consegui ler o arquivo: {erro}")
 
@@ -5014,6 +4533,7 @@ with st.container(key="carrinho_fixo"):
     st.markdown("<div style='text-align:center;font-weight:700;font-size:.85rem;color:#4a5568;'>"
                 "Fale com a gente</div>", unsafe_allow_html=True)
     barra_redes(LOJA, tamanho=50, sempre=True)
+    chat_cliente()  # chat ao vivo: assistente automático + falar com você
     st.markdown("### 🛒 Seu Carrinho")
     if not st.session_state.carrinho:
         st.info("O carrinho está vazio. Escolha uma categoria para começar.")
@@ -5066,6 +4586,9 @@ with st.container(key="carrinho_fixo"):
                     st.success(f"Entrega em {frete_atual['cidade']}/{frete_atual['uf']}: {texto_valor} "
                                f"| prazo de {frete_atual['prazo']} dias úteis")
                     st.markdown(f"### Total com frete: R$ {total_geral + frete_atual['valor']:.2f}")
+                    rua_bairro = ", ".join(x for x in [frete_atual.get("rua", ""), frete_atual.get("bairro", "")] if x)
+                    if rua_bairro:
+                        st.caption(f"📍 Endereço: {rua_bairro}. Confira e preencha o número da casa lá embaixo.")
             elif LOJA["frete_gratis_ligado"] and LOJA["frete_gratis_acima"] > 0:
                 st.caption(f"Frete grátis em pedidos a partir de R$ {LOJA['frete_gratis_acima']:.2f}")
 
@@ -5089,7 +4612,7 @@ with st.container(key="carrinho_fixo"):
                 st.warning("Pagamento com cartão em breve. Escolha Pix ou combine pelo WhatsApp.")
             st.text_input("Seu nome", key="cli_nome")
             st.text_input("Seu WhatsApp (com DDD)", key="cli_tel", placeholder="55999999999")
-            st.text_input("Número da casa", key="cli_numero")
+            st.text_input("Número da casa (obrigatório)", key="cli_numero", placeholder="ex.: 123 ou S/N")
             st.text_input("Complemento (opcional)", key="cli_comp", placeholder="apto, bloco, referência")
             st.text_input("Seu e-mail (opcional)", key="cli_email", placeholder="voce@email.com")
             if st.session_state.get("erro_cliente"):
@@ -5156,12 +4679,6 @@ with m5.popover("📱 QR da loja", use_container_width=True):
     else:
         st.caption("Em breve.")
 barra_redes(LOJA)
-
-# ----- Telinha flutuante: a equipe em miniatura trabalhando ao vivo (canto de baixo, à direita) -----
-if LOJA.get("mostrar_mini", True):
-    mini_cidade("loja")  # versão para o cliente: sem nomes, endereços nem valores
-else:
-    esconder_cidade()
 
 if modo_empresa():
     emp = st.session_state.empresa
