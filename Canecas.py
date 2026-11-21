@@ -39,6 +39,9 @@ ARQ_VITRINE = "dados_vitrine.json"
 PASTA_VIDEOS = "videos"
 PASTA_ARTES = "artes"
 ARQ_ARTES_PRONTAS = "dados_artes_prontas.json"
+ARQ_FOTOS_SEP = "dados_fotos_separadas.json"  # lista das fotos do separador (Gemini)
+PASTA_FOTOS_SEP = "fotos_separadas"            # as fotos em si ficam no banco com este começo de nome
+PASTA_REVISAR = "Revisar"                      # pasta das fotos em que o Gemini não teve certeza
 ARQ_FORNECEDORES = "dados_fornecedores.csv"
 ARQ_ESTOQUE = "dados_estoque.csv"
 ARQ_COMPRAS = "dados_compras.csv"
@@ -2044,7 +2047,8 @@ conteúdo inflamável, explosivo, causador de combustão ou qualquer outro proib
 # ===============================================================
 ARQUIVOS_DADOS = [ARQ_PRODUTOS, ARQ_CLIENTES, ARQ_PEDIDOS, ARQ_FRETE, ARQ_CLIQUES,
                   ARQ_LOJA, ARQ_APRESENTACOES, ARQ_VITRINE, ARQ_ARTES_PRONTAS,
-                  ARQ_FORNECEDORES, ARQ_ESTOQUE, ARQ_COMPRAS, ARQ_MOVIMENTOS, ARQ_PRECOS, ARQ_HIST, ARQ_CHAT]
+                  ARQ_FORNECEDORES, ARQ_ESTOQUE, ARQ_COMPRAS, ARQ_MOVIMENTOS, ARQ_PRECOS, ARQ_HIST, ARQ_CHAT,
+                  ARQ_FOTOS_SEP]
 
 
 def _nomes_textos() -> list:
@@ -2065,11 +2069,13 @@ def _todos_binarios():
         with _banco().connect() as c:
             for nome, dados in c.execute(_sql("SELECT nome, dados FROM binarios ORDER BY nome")):
                 yield nome, bytes(dados)
-    elif os.path.isdir(PASTA_ARTES):
-        for n in os.listdir(PASTA_ARTES):
-            if not n.endswith(".html"):
-                with open(os.path.join(PASTA_ARTES, n), "rb") as f:
-                    yield f"{PASTA_ARTES}/{n}", f.read()
+    else:
+        for pasta in (PASTA_ARTES, PASTA_FOTOS_SEP):
+            if os.path.isdir(pasta):
+                for n in os.listdir(pasta):
+                    if not n.endswith(".html"):
+                        with open(os.path.join(pasta, n), "rb") as f:
+                            yield f"{pasta}/{n}", f.read()
 
 
 def gerar_backup_zip() -> bytes:
@@ -2127,6 +2133,8 @@ def restaurar_backup_zip(arquivo) -> int:
                     _gravar_texto(nome, z.read(nome).decode("utf-8"))
                 else:
                     gravar_bin(nome, z.read(nome))
+            elif pasta == PASTA_FOTOS_SEP:
+                gravar_bin(nome, z.read(nome))
             elif pasta == PASTA_VIDEOS:
                 os.makedirs(PASTA_VIDEOS, exist_ok=True)
                 with open(nome, "wb") as f:
@@ -2680,11 +2688,261 @@ def painel_conversas():
 
 
 # ===============================================================
+# SEPARADOR DE FOTOS (Gemini)
+# Você manda várias fotos misturadas; o Gemini diz de qual categoria é cada uma e a foto é guardada
+# na "pasta" daquela categoria no banco (Supabase). As categorias NÃO ficam no código: elas são lidas
+# na hora da lista de produtos do painel. Criou, mudou ou apagou uma categoria? O separador já segue.
+# Na dúvida, a foto vai para a pasta "Revisar".
+# ===============================================================
+GEMINI_MODELOS = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash"]  # plano grátis
+FOTO_SEP_MAX_MB = 10
+
+
+class ErroGemini(Exception):
+    pass
+
+
+def chave_gemini() -> str:
+    return str(_segredo("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY") or "").strip()
+
+
+def categorias_do_painel() -> list:
+    """A MESMA lista de categorias do painel de Produtos (lida na hora, nada fixo no código)."""
+    df = carregar_produtos()
+    return sorted({str(c).strip() for c in df["categoria"].tolist() if str(c).strip()} - {PASTA_REVISAR})
+
+
+def _pistas_categorias(categorias: list) -> str:
+    """Monta, para o Gemini, uma linha por categoria com exemplos de produtos dela (ajuda a acertar)."""
+    df = carregar_produtos()
+    linhas = []
+    for cat in categorias:
+        grupo = df[df["categoria"].astype(str).str.strip() == cat]
+        modelos = ", ".join(grupo["modelo"].astype(str).head(4).tolist())
+        desc = next((str(d) for d in grupo["descricao"].tolist() if str(d).strip()), "")[:160]
+        extra = "; ".join(x for x in [f"produtos: {modelos}" if modelos else "", desc] if x)
+        linhas.append(f"- {cat}" + (f" ({extra})" if extra else ""))
+    return "\n".join(linhas)
+
+
+def preparar_foto(dados: bytes, lado_max: int) -> bytes:
+    """Gira a foto do jeito certo, tira transparência e diminui (foto menor = banco leve e Gemini rápido)."""
+    from PIL import Image, ImageOps
+    img = Image.open(io.BytesIO(dados))
+    img = ImageOps.exif_transpose(img)
+    if img.mode in ("RGBA", "LA", "P"):
+        img = img.convert("RGBA")
+        fundo = Image.new("RGB", img.size, (255, 255, 255))
+        fundo.paste(img, mask=img.split()[-1])
+        img = fundo
+    else:
+        img = img.convert("RGB")
+    img.thumbnail((lado_max, lado_max))
+    saida = io.BytesIO()
+    img.save(saida, "JPEG", quality=85, optimize=True)
+    return saida.getvalue()
+
+
+def _chamar_gemini(modelo: str, corpo: dict) -> dict:
+    req = urllib.request.Request(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent",
+        data=json.dumps(corpo).encode("utf-8"),
+        headers={"Content-Type": "application/json", "x-goog-api-key": chave_gemini()}, method="POST")
+    with urllib.request.urlopen(req, timeout=90) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def classificar_foto(jpeg: bytes, categorias: list) -> dict:
+    """Pergunta ao Gemini de qual categoria é a foto. Devolve {categoria, confianca, motivo}."""
+    import urllib.error
+    opcoes = categorias + ["Nenhuma"]
+    prompt = (
+        "Você separa fotos de produtos de uma loja de presentes personalizados.\n"
+        f"Categorias que existem hoje na loja:\n{_pistas_categorias(categorias)}\n\n"
+        "Olhe a foto e diga a qual categoria ela pertence, usando EXATAMENTE um dos nomes da lista. "
+        "Se a foto não for de nenhuma delas, responda \"Nenhuma\". "
+        "Em \"confianca\", dê um número de 0 a 1: perto de 1 só se tiver certeza; se ficar em dúvida entre "
+        "duas categorias ou a foto estiver ruim, dê um número baixo. "
+        "Em \"motivo\", explique em poucas palavras, em português, o que você viu na foto.")
+    corpo = {
+        "contents": [{"parts": [{"text": prompt},
+                                {"inline_data": {"mime_type": "image/jpeg",
+                                                 "data": base64.b64encode(jpeg).decode()}}]}],
+        "generationConfig": {
+            "temperature": 0,
+            "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "OBJECT",
+                "properties": {"categoria": {"type": "STRING", "enum": opcoes},
+                               "confianca": {"type": "NUMBER"},
+                               "motivo": {"type": "STRING"}},
+                "required": ["categoria", "confianca", "motivo"]},
+        },
+    }
+    modelos = list(GEMINI_MODELOS)
+    preferido = st.session_state.get("gemini_modelo_ok")
+    if preferido in modelos:
+        modelos.remove(preferido)
+        modelos.insert(0, preferido)
+    ultimo_erro = "sem resposta"
+    for modelo in modelos:
+        for tentativa in range(4):
+            try:
+                resp = _chamar_gemini(modelo, corpo)
+            except urllib.error.HTTPError as e:
+                texto = e.read().decode("utf-8", "ignore")
+                if e.code == 429:  # passou do limite por minuto do plano grátis: espera e tenta de novo
+                    espera = 20
+                    try:
+                        for d in json.loads(texto)["error"].get("details", []):
+                            if "retryDelay" in d:
+                                espera = float(str(d["retryDelay"]).rstrip("s"))
+                    except Exception:
+                        pass
+                    if "PerDay" in texto or "per day" in texto.lower():
+                        raise ErroGemini("O limite grátis de hoje do Gemini acabou. Tente de novo amanhã.")
+                    ultimo_erro = "limite por minuto do Gemini"
+                    time.sleep(min(max(espera, 5), 60) + 1)
+                    continue
+                if e.code in (400, 401, 403) and ("API key" in texto or "API_KEY" in texto or e.code != 400):
+                    raise ErroGemini("A chave GEMINI_API_KEY foi recusada pelo Google. Confira nos Secrets.")
+                if e.code in (500, 503):
+                    ultimo_erro = "Gemini ocupado"
+                    time.sleep(5)
+                    continue
+                ultimo_erro = f"erro {e.code} no modelo {modelo}"
+                break  # modelo indisponível (ex.: 404): tenta o próximo da lista
+            except Exception as e:
+                ultimo_erro = type(e).__name__
+                time.sleep(3)
+                continue
+            try:
+                texto = resp["candidates"][0]["content"]["parts"][0]["text"]
+                dados = json.loads(texto)
+            except Exception:
+                ultimo_erro = "resposta vazia do Gemini"
+                break
+            st.session_state.gemini_modelo_ok = modelo
+            try:
+                conf = float(dados.get("confianca", 0))
+            except Exception:
+                conf = 0.0
+            return {"categoria": str(dados.get("categoria", "")).strip(),
+                    "confianca": max(0.0, min(conf, 1.0)),
+                    "motivo": str(dados.get("motivo", "")).strip()[:200]}
+    raise ErroGemini(f"Não consegui falar com o Gemini ({ultimo_erro}).")
+
+
+def ler_fotos_sep() -> list:
+    return ler_json(ARQ_FOTOS_SEP, [])
+
+
+def apagar_bin(nome: str):
+    if URL_BANCO:
+        with _banco().begin() as c:
+            c.execute(_sql("DELETE FROM binarios WHERE nome = :n"), {"n": nome})
+    elif os.path.exists(nome):
+        os.remove(nome)
+
+
+def guardar_foto_sep(jpeg: bytes, nome_original: str, pasta: str, sugestao: str, confianca: float,
+                     motivo: str, hash_foto: str) -> dict:
+    fid = uuid.uuid4().hex[:12]
+    arquivo = f"{PASTA_FOTOS_SEP}/{fid}.jpg"
+    gravar_bin(arquivo, jpeg)
+    reg = {"id": fid, "pasta": pasta, "arquivo": arquivo, "nome": nome_original,
+           "data": datetime.now().strftime("%d/%m/%Y %H:%M"), "sugestao": sugestao,
+           "confianca": round(confianca, 2), "motivo": motivo, "hash": hash_foto}
+    with trava():
+        lista = ler_fotos_sep()
+        lista.append(reg)
+        gravar_json(ARQ_FOTOS_SEP, lista)
+    return reg
+
+
+def mover_fotos_sep(ids: set, pasta: str):
+    with trava():
+        lista = ler_fotos_sep()
+        for f in lista:
+            if f["id"] in ids:
+                f["pasta"] = pasta
+        gravar_json(ARQ_FOTOS_SEP, lista)
+
+
+def excluir_foto_sep(fid: str):
+    with trava():
+        lista = ler_fotos_sep()
+        alvo = [f for f in lista if f["id"] == fid]
+        gravar_json(ARQ_FOTOS_SEP, [f for f in lista if f["id"] != fid])
+    for f in alvo:
+        apagar_bin(f["arquivo"])
+
+
+def separar_fotos(arquivos: list, limite: float, aviso=None) -> dict:
+    """Manda cada foto para o Gemini e guarda na pasta certa. Devolve um resumo do que aconteceu."""
+    import hashlib
+    categorias = categorias_do_painel()
+    ja_tem = {f.get("hash") for f in ler_fotos_sep()}
+    resumo = {"total": len(arquivos), "por_pasta": {}, "repetidas": 0, "erros": []}
+    barra = st.progress(0.0, text="Começando...")
+    for n, arq in enumerate(arquivos, start=1):
+        barra.progress((n - 1) / len(arquivos), text=f"Foto {n} de {len(arquivos)}: {arq.name}")
+        bruto = arq.getvalue()
+        hash_foto = hashlib.sha1(bruto).hexdigest()
+        if hash_foto in ja_tem:
+            resumo["repetidas"] += 1
+            continue
+        if len(bruto) > FOTO_SEP_MAX_MB * 1024 * 1024:
+            resumo["erros"].append(f"{arq.name}: passa de {FOTO_SEP_MAX_MB} MB")
+            continue
+        try:
+            guardar = preparar_foto(bruto, 1600)
+            pequena = preparar_foto(bruto, 768)
+        except Exception:
+            resumo["erros"].append(f"{arq.name}: não consegui abrir a imagem")
+            continue
+        try:
+            r = classificar_foto(pequena, categorias)
+            cat, conf, motivo = r["categoria"], r["confianca"], r["motivo"]
+        except ErroGemini as e:
+            resumo["erros"].append(f"{arq.name}: {e}")
+            if "chave" in str(e).lower() or "hoje" in str(e).lower():
+                # sem chave ou sem cota: guarda o resto no Revisar para não perder as fotos
+                for resto in arquivos[n - 1:]:
+                    b = resto.getvalue()
+                    h = hashlib.sha1(b).hexdigest()
+                    if h in ja_tem or len(b) > FOTO_SEP_MAX_MB * 1024 * 1024:
+                        continue
+                    try:
+                        guardar_foto_sep(preparar_foto(b, 1600), resto.name, PASTA_REVISAR, "", 0.0,
+                                         "Não foi separada: " + str(e), h)
+                        ja_tem.add(h)
+                        resumo["por_pasta"][PASTA_REVISAR] = resumo["por_pasta"].get(PASTA_REVISAR, 0) + 1
+                    except Exception:
+                        pass
+                break
+            cat, conf, motivo = "", 0.0, f"O Gemini não respondeu ({e})"
+        if cat in categorias and conf >= limite:
+            pasta = cat
+        else:
+            pasta = PASTA_REVISAR
+            if cat not in categorias:
+                motivo = (motivo + " · " if motivo else "") + "não parece ser de nenhuma categoria"
+            else:
+                motivo = (motivo + " · " if motivo else "") + f"certeza baixa ({conf:.0%})"
+        guardar_foto_sep(guardar, arq.name, pasta, cat if cat in categorias else "", conf, motivo, hash_foto)
+        ja_tem.add(hash_foto)
+        resumo["por_pasta"][pasta] = resumo["por_pasta"].get(pasta, 0) + 1
+    barra.progress(1.0, text="Pronto!")
+    return resumo
+
+
+# ===============================================================
 # PAINEL DO ADMINISTRADOR
 # ===============================================================
 SECOES_ADMIN = {
     "VISÃO GERAL": ["📊 Resumo", "🔨 Mesa do chefe"],
-    "CATÁLOGO": ["📦 Produtos", "🖼️ Fotos", "🎨 Galeria de artes"],
+    "CATÁLOGO": ["📦 Produtos", "🖼️ Fotos", "🗂️ Separador de fotos", "🎨 Galeria de artes"],
     "VENDAS": ["💬 Chat ao vivo", "👥 Clientes", "🧾 Pedidos", "🚚 Rastreio", "🏷️ Etiquetas", "🖨️ Artes", "📄 Nota fiscal", "📍 Frete"],
     "COMPRAS": ["🏭 Estoque e compras"],
     "MARKETING": ["🏢 Apresentações", "🎬 Vitrine", "👁️ Interesse"],
@@ -3216,6 +3474,146 @@ O WhatsApp não deixa a loja responder por você, mas o próprio WhatsApp Busine
                         st.rerun()
                 elif arq_cat is not None:
                     st.error("A foto passa de 2 MB.")
+    # ---------------------------------------------------------- SEPARADOR DE FOTOS (Gemini)
+    elif secao == "🗂️ Separador de fotos":
+        st.caption("Envie várias fotos misturadas de uma vez. O Gemini olha cada uma, descobre a categoria e "
+                   "guarda na pasta certa. Na dúvida, a foto vai para a pasta **Revisar**.")
+        cats_sep = categorias_do_painel()
+        fotos_sep = ler_fotos_sep()
+        if not chave_gemini():
+            st.error("🔑 Falta a chave do Gemini. No Streamlit, abra Settings → Secrets e acrescente uma linha: "
+                     "`GEMINI_API_KEY = \"sua-chave\"` (a chave grátis sai em aistudio.google.com).")
+        if not cats_sep:
+            st.info("Você ainda não tem categorias. Crie em 📦 Produtos → Nova categoria.")
+        else:
+            st.markdown("**Categorias que o separador usa agora** (vêm do seu painel de Produtos; mudou lá, "
+                        "muda aqui sozinho): " + " · ".join(f"`{c}`" for c in cats_sep))
+        if st.session_state.get("sep_resumo"):
+            r = st.session_state.pop("sep_resumo")
+            partes = [f"**{p}**: {q}" for p, q in sorted(r["por_pasta"].items(), key=lambda x: x[0] == PASTA_REVISAR)]
+            st.success(f"✅ {sum(r['por_pasta'].values())} foto(s) separada(s). " + " · ".join(partes))
+            if r["repetidas"]:
+                st.info(f"♻️ {r['repetidas']} foto(s) já tinham sido separadas antes e foram puladas.")
+            for e in r["erros"]:
+                st.warning(e)
+
+        with st.container(border=True):
+            limite_sep = st.slider("Certeza mínima para separar sozinho (abaixo disso vai para Revisar)",
+                                   50, 100, int(LOJA.get("separador_certeza", 80)), 5, format="%d%%",
+                                   key="sep_limite")
+            if limite_sep != int(LOJA.get("separador_certeza", 80)):
+                LOJA["separador_certeza"] = int(limite_sep)
+                gravar_loja(LOJA)
+            with st.form("form_separador", clear_on_submit=True):
+                sep_arqs = st.file_uploader(f"Fotos (pode escolher várias de uma vez, até {FOTO_SEP_MAX_MB} MB cada)",
+                                            type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
+                enviar_sep = st.form_submit_button("🤖 Separar fotos", type="primary",
+                                                   disabled=not (chave_gemini() and cats_sep))
+            if enviar_sep:
+                if not sep_arqs:
+                    st.error("Escolha pelo menos uma foto.")
+                else:
+                    st.session_state.sep_resumo = separar_fotos(sep_arqs, limite_sep / 100)
+                    st.rerun()
+
+        # ----- Pastas -----
+        titulo_secao("📁 Pastas")
+        # Foto de categoria que foi apagada ou renomeada volta para o Revisar automaticamente
+        orfas = [f for f in fotos_sep if f["pasta"] != PASTA_REVISAR and f["pasta"] not in cats_sep]
+        contagem = {c: sum(1 for f in fotos_sep if f["pasta"] == c) for c in cats_sep}
+        n_revisar = sum(1 for f in fotos_sep if f["pasta"] == PASTA_REVISAR) + len(orfas)
+        rotulos = {f"⚠️ {PASTA_REVISAR} ({n_revisar})": PASTA_REVISAR}
+        rotulos.update({f"📁 {c} ({contagem[c]})": c for c in cats_sep})
+        escolha = st.selectbox("Abrir pasta", list(rotulos), key="sep_pasta")
+        pasta_ver = rotulos[escolha]
+        destinos = cats_sep + [PASTA_REVISAR]
+
+        if pasta_ver == PASTA_REVISAR:
+            mostrar_sep = [f for f in fotos_sep if f["pasta"] == PASTA_REVISAR] + orfas
+            for antiga in sorted({f["pasta"] for f in orfas}):
+                ids_antiga = {f["id"] for f in orfas if f["pasta"] == antiga}
+                with st.container(border=True):
+                    o1, o2, o3 = st.columns([3, 2, 1])
+                    o1.markdown(f"🗃️ **{len(ids_antiga)} foto(s)** da categoria **{antiga}**, que não existe mais "
+                                "(foi apagada ou renomeada).")
+                    novo = o2.selectbox("Mover todas para", cats_sep, key=f"sep_orf_{antiga}",
+                                        label_visibility="collapsed") if cats_sep else None
+                    if novo and o3.button("Mover todas", key=f"sep_orf_btn_{antiga}", use_container_width=True):
+                        mover_fotos_sep(ids_antiga, novo)
+                        st.rerun()
+            pendentes = [f for f in mostrar_sep if cats_sep]
+            if pendentes and chave_gemini():
+                if st.button(f"🔁 Pedir para o Gemini tentar de novo as {len(pendentes)} foto(s) do Revisar",
+                             key="sep_retentar"):
+                    movidas, barra = 0, st.progress(0.0)
+                    for n, f in enumerate(pendentes, start=1):
+                        barra.progress(n / len(pendentes), text=f"Foto {n} de {len(pendentes)}")
+                        try:
+                            bruto = ler_bin(f["arquivo"])
+                            r = classificar_foto(preparar_foto(bruto, 768), cats_sep)
+                        except ErroGemini as e:
+                            st.warning(str(e))
+                            break
+                        except Exception:
+                            continue
+                        if r["categoria"] in cats_sep and r["confianca"] >= limite_sep / 100:
+                            mover_fotos_sep({f["id"]}, r["categoria"])
+                            movidas += 1
+                    st.session_state.sep_resumo = {"por_pasta": {"saíram do Revisar": movidas},
+                                                   "repetidas": 0, "erros": []}
+                    st.rerun()
+        else:
+            mostrar_sep = [f for f in fotos_sep if f["pasta"] == pasta_ver]
+
+        mostrar_sep = list(reversed(mostrar_sep))  # mais novas primeiro
+        if not mostrar_sep:
+            st.caption("Pasta vazia.")
+        else:
+            por_pagina = 12
+            paginas = (len(mostrar_sep) - 1) // por_pagina + 1
+            pag = st.number_input(f"Página (de {paginas})", 1, paginas, 1, key=f"sep_pag_{pasta_ver}") if paginas > 1 else 1
+            trecho = mostrar_sep[(pag - 1) * por_pagina: pag * por_pagina]
+            for ini in range(0, len(trecho), 4):
+                for col, f in zip(st.columns(4), trecho[ini:ini + 4]):
+                    with col, st.container(border=True):
+                        bruto = ler_bin(f["arquivo"])
+                        if bruto:
+                            st.image(bruto, use_container_width=True)
+                        else:
+                            st.caption("(imagem não encontrada)")
+                        st.markdown(f"**{html.escape(f.get('nome', ''))}**")
+                        info = f"{f.get('data', '')}"
+                        if f["pasta"] != PASTA_REVISAR and f["pasta"] not in cats_sep:
+                            info += f" · era de {f['pasta']}"
+                        elif f.get("sugestao") and f["pasta"] == PASTA_REVISAR:
+                            info += f" · palpite: {f['sugestao']} ({float(f.get('confianca') or 0):.0%})"
+                        elif f.get("confianca") not in (None, ""):
+                            info += f" · certeza {float(f.get('confianca') or 0):.0%}"
+                        st.caption(info)
+                        if f.get("motivo"):
+                            st.caption(f"🤖 {f['motivo']}")
+                        atual_idx = destinos.index(f["pasta"]) if f["pasta"] in destinos else (
+                            destinos.index(f["sugestao"]) if f.get("sugestao") in destinos else 0)
+                        dest = st.selectbox("Pasta", destinos, index=atual_idx, key=f"sep_dest_{f['id']}",
+                                            label_visibility="collapsed")
+                        b1, b2 = st.columns(2)
+                        if b1.button("Mover", key=f"sep_mov_{f['id']}", use_container_width=True,
+                                     disabled=dest == f["pasta"]):
+                            mover_fotos_sep({f["id"]}, dest)
+                            st.rerun()
+                        if b2.button("🗑️", key=f"sep_del_{f['id']}", use_container_width=True, help="Excluir foto"):
+                            excluir_foto_sep(f["id"])
+                            st.rerun()
+                        if f["pasta"] in cats_sep and bruto:
+                            with st.popover("🖼️ Usar no produto", use_container_width=True):
+                                mods = df_produtos[df_produtos["categoria"].astype(str).str.strip() == f["pasta"]]["modelo"].tolist()
+                                prod = st.selectbox("Produto", mods, key=f"sep_prod_{f['id']}")
+                                if st.button("Usar esta foto", key=f"sep_usar_{f['id']}", type="primary"):
+                                    novo_df = df_produtos.copy()
+                                    m = (novo_df["categoria"].astype(str).str.strip() == f["pasta"]) & (novo_df["modelo"] == prod)
+                                    novo_df.loc[m, "imagem"] = "data:image/jpeg;base64," + base64.b64encode(bruto).decode()
+                                    gravar_csv(ARQ_PRODUTOS, novo_df)
+                                    st.rerun()
     # ---------------------------------------------------------- CLIENTES
     elif secao == "👥 Clientes":
         clientes = ler_csv(ARQ_CLIENTES, COLUNAS_CLIENTES)
