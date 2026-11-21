@@ -5,6 +5,7 @@ import io
 import json
 import os
 import random
+import re
 import threading
 import time
 import urllib.parse
@@ -42,6 +43,8 @@ ARQ_ARTES_PRONTAS = "dados_artes_prontas.json"
 ARQ_FOTOS_SEP = "dados_fotos_separadas.json"  # lista das fotos do separador (Gemini)
 PASTA_FOTOS_SEP = "fotos_separadas"            # as fotos em si ficam no banco com este começo de nome
 PASTA_REVISAR = "Revisar"                      # pasta das fotos em que o Gemini não teve certeza
+ARQ_AVALIACOES = "dados_avaliacoes.json"      # avaliações e fotos de clientes (você aprova antes)
+PASTA_LOJA_IMG = "loja_imagens"               # logo, fundo, foto do Quem somos e fotos das avaliações
 ARQ_FORNECEDORES = "dados_fornecedores.csv"
 ARQ_ESTOQUE = "dados_estoque.csv"
 ARQ_COMPRAS = "dados_compras.csv"
@@ -71,6 +74,50 @@ LOJA_PADRAO = {
     "nome_empresa": "Nome da Empresa",
     "subtitulo": "Catálogo Completo de Produtos Personalizados",
     "frase_banner": "Sua marca, do seu jeito.",
+    # ---- Aparência da loja (painel > 🖌️ Aparência da loja)
+    "fundo_cor": "#f4f6fb",
+    "fundo_foto": "",            # nome da foto guardada no banco
+    "cartao_opacidade": 88,      # quanto os quadradinhos ficam brancos por cima do fundo (%)
+    "cor_titulos": "#1a2233",
+    "fonte_loja": "Padrão",
+    "logo": "",                  # nome da logo guardada no banco
+    "logo_altura": 70,
+    "borda_cor": "#d9dfeb",
+    "borda_grossura": 1,
+    "borda_cantos": 14,
+    "borda_sombra": "Leve",
+    # ---- Vendas (painel > 📣 Promoções e selos / ⭐ Avaliações)
+    "banners": [],
+    "selo_mais_vendido_auto": True,
+    "selo_mais_vendido_qtd": 5,
+    "avaliacoes_ligadas": True,
+    "wpp_flutuante": True,
+    "wpp_flutuante_msg": "Olá! Vim pela loja e quero tirar uma dúvida.",
+    # ---- Confiança (painel > 🤝 Confiança e rodapé)
+    "rodape_ligado": True,
+    "rodape_cnpj": "",
+    "rodape_cidade": "",
+    "rodape_email": "",
+    "rodape_horario": "",        # vazio = usa o horário do chat
+    "quem_somos_titulo": "Quem somos",
+    "quem_somos_texto": "Conte aqui a história da sua loja: como começou, quem faz os produtos e o que "
+                        "vocês mais gostam de criar. Os clientes compram mais de quem eles conhecem.",
+    "quem_somos_foto": "",
+    "regra_producao": "Cada produto é feito sob encomenda. O prazo de produção aparece na página do produto "
+                      "(normalmente 5 dias úteis) e começa a contar depois da confirmação do pagamento e da arte.",
+    "regra_entrega": "Enviamos para todo o Brasil. O valor e o prazo do frete aparecem no carrinho quando você "
+                     "digita o CEP. O prazo de entrega começa a contar depois que o pedido fica pronto.",
+    "regra_trocas": "Como os produtos são personalizados, não fazemos troca por arrependimento depois que a "
+                    "produção começa. Antes disso, é só chamar no WhatsApp que a gente ajusta.",
+    "regra_defeitos": "Se o produto chegar com defeito, quebrado ou diferente do pedido, mande fotos no WhatsApp "
+                      "em até 7 dias depois de receber, com o número do pedido. Refazemos ou devolvemos o valor.",
+    "selos_confianca": True,
+    "selo_1": "🔒 Pagamento seguro",
+    "selo_2": "✅ Compra garantida",
+    "contador_entregues": True,
+    "contador_extra": 0,         # some aqui pedidos entregues antes da loja online
+    # ---- Separador de fotos
+    "esconder_sem_foto": True,   # loja mostra só produtos com foto de verdade (sem caixinhas vazias)
     "whatsapp": "5555996374854",
     "cor_principal": "#1d4ed8",
     "fundo": "Personalização (ícones)",
@@ -178,6 +225,7 @@ COLUNAS_PRODUTOS = [
     "sku", "custo", "estoque", "destaque", "tags", "peso_g",
     "prazo_producao_dias", "obs_internas",
     "preco_promocional", "promo_inicio", "promo_fim", "variacoes",
+    "novidade", "mais_vendido",
 ]
 COLUNAS_FRETE = ["uf", "estado", "valor", "prazo_dias"]
 COLUNAS_CLIENTES = [
@@ -218,6 +266,14 @@ TRANSPORTADORAS = {
     "Outra": "",
 }
 FUNDOS = ["Personalização (ícones)", "Listras suaves", "Pontinhos", "Liso"]
+FUNDOS_LOJA = FUNDOS + ["Cor sólida", "Minha foto"]
+# Fontes grátis do Google Fonts (nome no painel: nome no Google)
+FONTES_LOJA = {"Padrão": "", "Poppins": "Poppins", "Montserrat": "Montserrat", "Nunito": "Nunito",
+               "Quicksand": "Quicksand", "Roboto": "Roboto", "Open Sans": "Open Sans", "Lato": "Lato",
+               "Raleway": "Raleway", "Comfortaa (arredondada)": "Comfortaa", "Baloo 2 (divertida)": "Baloo 2",
+               "Playfair Display (elegante)": "Playfair Display", "Merriweather (clássica)": "Merriweather"}
+SOMBRAS_LOJA = {"Nenhuma": "none", "Leve": "0 2px 8px rgba(26,34,51,.07)", "Média": "0 6px 18px rgba(26,34,51,.14)",
+                "Forte": "0 12px 30px rgba(26,34,51,.24)"}
 FONTES_PERSO = ["Padrão", "Cursiva", "Bastão", "Manuscrita", "Elegante"]
 CORES_PECA = {"Branco": "#ffffff", "Preto": "#1f2937", "Cinza": "#9ca3af", "Rosa": "#f9a8d4", "Vermelho": "#dc2626",
               "Azul": "#3b82f6", "Azul-marinho": "#1e3a8a", "Verde": "#16a34a", "Amarelo": "#facc15", "Lilás": "#c4b5fd"}
@@ -463,6 +519,56 @@ def gravar_bin(nome: str, dados: bytes):
         os.makedirs(os.path.dirname(nome) or ".", exist_ok=True)
         with open(nome, "wb") as f:
             f.write(dados)
+    _esquecer(("B", nome))
+
+
+def apagar_bin(nome: str):
+    if URL_BANCO:
+        with _banco().begin() as c:
+            c.execute(_sql("DELETE FROM binarios WHERE nome = :n"), {"n": nome})
+    elif os.path.exists(nome):
+        os.remove(nome)
+    _esquecer(("B", nome))
+
+
+PREFIXO_BIN = "bin:"  # imagem guardada no banco: o produto guarda só "bin:nome", e não a foto inteira
+
+
+def imagem_do_banco(nome: str) -> str:
+    """Foto guardada no banco, pronta para mostrar na tela (fica na memória para não ir ao banco toda hora)."""
+    def carregar():
+        dados = ler_bin(nome)
+        if not dados:
+            return ""
+        if dados[:8] == b"\x89PNG\r\n\x1a\n":
+            tipo = "image/png"
+        elif dados[8:12] == b"WEBP":
+            tipo = "image/webp"
+        else:
+            tipo = "image/jpeg"
+        return f"data:{tipo};base64," + base64.b64encode(dados).decode()
+    return _cacheado(("B", nome), carregar) if nome else ""
+
+
+def resolver_imagem(url) -> str:
+    url = str(url or "").strip()
+    if url.startswith(PREFIXO_BIN):
+        return imagem_do_banco(url[len(PREFIXO_BIN):])
+    return url
+
+
+def foto_livre(url) -> bool:
+    """Produto sem foto própria (vazio ou só a foto de exemplo da internet)."""
+    u = str(url or "").strip()
+    return not u or "loremflickr.com" in u
+
+
+def tem_foto_propria(linha) -> bool:
+    """O produto tem foto de verdade? (foto do banco que existe, foto enviada ou link que não é o de exemplo)."""
+    u = str(linha["imagem"] or "").strip()
+    if foto_livre(u):
+        return False
+    return bool(resolver_imagem(u))
 
 
 def ler_bin(nome: str):
@@ -690,15 +796,55 @@ def css_fundo(tipo: str) -> str:
             f"background-image: url(\"data:image/svg+xml;utf8,{svg_url}\") !important;")
 
 
-COR = LOJA["cor_principal"]
+def cor_ok(valor, padrao: str) -> str:
+    """Só aceita cor no formato #rrggbb (evita quebrar a página com um valor estranho)."""
+    valor = str(valor or "").strip()
+    return valor if re.fullmatch(r"#[0-9a-fA-F]{6}", valor) else padrao
+
+
+def css_fundo_loja(loja: dict) -> str:
+    tipo = loja.get("fundo", FUNDOS[0])
+    cor = cor_ok(loja.get("fundo_cor"), "#f4f6fb")
+    if tipo == "Cor sólida":
+        return f"background-color: {cor} !important; background-image: none !important;"
+    if tipo == "Minha foto":
+        src = imagem_do_banco(loja.get("fundo_foto", ""))
+        if src:
+            return (f"background-color: {cor} !important; background-image: url('{src}') !important; "
+                    "background-size: cover !important; background-position: center !important; "
+                    "background-attachment: fixed !important; background-repeat: no-repeat !important;")
+        return f"background-color: {cor} !important;"
+    return css_fundo(tipo)
+
+
+def css_fonte_loja(nome: str) -> tuple:
+    """Devolve (linha que carrega a fonte do Google, nome da fonte para o CSS)."""
+    google = FONTES_LOJA.get(nome, "")
+    if not google:
+        return "", "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
+    importar = f"@import url('https://fonts.googleapis.com/css2?family={google.replace(' ', '+')}:wght@400;600;700;800&display=swap');"
+    return importar, f"'{google}', 'Segoe UI', sans-serif"
+
+
+COR = cor_ok(LOJA["cor_principal"], "#1d4ed8")
+COR_TIT = cor_ok(LOJA.get("cor_titulos"), "#1a2233")
+FONTE_IMPORT, FONTE_CSS = css_fonte_loja(LOJA.get("fonte_loja", "Padrão"))
+CARTAO_FUNDO = f"rgba(255, 255, 255, {max(30, min(int(LOJA.get('cartao_opacidade', 88) or 88), 100)) / 100:.2f})"
+BORDA = (f"{max(0, min(int(LOJA.get('borda_grossura', 1) or 0), 8))}px solid "
+         f"{cor_ok(LOJA.get('borda_cor'), '#d9dfeb')}")
+CANTOS = f"{max(0, min(int(LOJA.get('borda_cantos', 14) or 0), 40))}px"
+SOMBRA = SOMBRAS_LOJA.get(LOJA.get("borda_sombra", "Leve"), SOMBRAS_LOJA["Leve"])
 
 st.markdown(f"""
     <style>
+    {FONTE_IMPORT}
     html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"] {{
-        {css_fundo(LOJA["fundo"])}
+        {css_fundo_loja(LOJA)}
         color: #1a2233 !important;
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        font-family: {FONTE_CSS};
     }}
+    p, h1, h2, h3, h4, h5, h6, li, label, button, input, textarea, .banner, .titulo-secao,
+    .rodape, .rodape *, .faixa-confianca span, .cartao-aval, .cartao-aval *, .faixa-promo {{ font-family: {FONTE_CSS}; }}
     /* Esconde menu, rodapé e botões do Streamlit para o cliente */
     #MainMenu, footer, [data-testid="stToolbar"], [data-testid="stDecoration"],
     [data-testid="stStatusWidget"], [class*="viewerBadge"], [data-testid="stAppDeployButton"]
@@ -713,9 +859,12 @@ st.markdown(f"""
     [data-testid="stMarkdownContainer"], [data-testid="stWidgetLabel"],
     [data-testid="stMetricLabel"], [data-testid="stMetricValue"] {{ color: #1a2233; }}
     [data-testid="stCaptionContainer"] p {{ color: #4a5568 !important; }}
+    h1, h2, h3, [data-testid="stMarkdownContainer"] h1, [data-testid="stMarkdownContainer"] h2,
+    [data-testid="stMarkdownContainer"] h3, [data-testid="stHeading"] * {{ color: {COR_TIT}; }}
     [data-testid="stVerticalBlockBorderWrapper"] {{
-        background-color: #ffffff; border: 1px solid #d9dfeb !important;
-        border-radius: 14px; box-shadow: 0 2px 8px rgba(26, 34, 51, 0.06);
+        background-color: {CARTAO_FUNDO}; border: {BORDA} !important;
+        border-radius: {CANTOS}; box-shadow: {SOMBRA};
+        backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
     }}
     [data-testid="stMetric"] {{
         background: #ffffff; border: 1px solid #d9dfeb; border-left: 5px solid {COR};
@@ -743,7 +892,9 @@ st.markdown(f"""
         padding: 18px 26px; margin-bottom: 10px; box-shadow: 0 6px 18px rgba(26,34,51,0.15);
     }}
     .banner h1, .banner p, .banner span {{ color: #ffffff !important; margin: 0; }}
-    .banner h1 {{ font-size: 1.9rem; }}
+    .banner h1 {{ font-size: 1.9rem; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }}
+    .banner .logo {{ max-height: {max(30, min(int(LOJA.get("logo_altura", 70) or 70), 160))}px; max-width: 260px;
+        object-fit: contain; border-radius: 10px; }}
     .titulo-secao {{
         background: {COR}; color: #ffffff !important; padding: 8px 14px; border-radius: 10px;
         font-weight: 700; font-size: 1.05rem; margin: 6px 0 12px;
@@ -763,6 +914,32 @@ st.markdown(f"""
              font-weight: 700; background: #fee2e2; color: #991b1b; }}
     .selo-ok {{ background: #dcfce7; color: #166534; }}
     .selo-promo {{ background: #fef3c7; color: #92400e; }}
+    .selo-novo {{ background: #dbeafe; color: #1e40af; }}
+    .selo-top {{ background: #ffedd5; color: #9a3412; }}
+    .faixa-promo {{ color: #ffffff !important; text-align: center; font-weight: 700; padding: 9px 14px;
+        border-radius: 12px; margin-bottom: 8px; font-size: 1rem; box-shadow: 0 3px 10px rgba(0,0,0,.12);
+        animation: piscar 2.4s ease-in-out infinite; }}
+    @keyframes piscar {{ 0%, 100% {{ filter: brightness(1); }} 50% {{ filter: brightness(1.12); }} }}
+    .faixa-confianca {{ display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 4px 0 12px; }}
+    .faixa-confianca span {{ background: {CARTAO_FUNDO}; border: {BORDA}; border-radius: 999px; padding: 6px 14px;
+        font-size: .88rem; font-weight: 600; box-shadow: {SOMBRA}; }}
+    .cartao-aval {{ background: {CARTAO_FUNDO}; border: {BORDA}; border-radius: {CANTOS}; box-shadow: {SOMBRA};
+        padding: 12px; margin-bottom: 12px; }}
+    .cartao-aval .estrelas {{ color: #f59e0b !important; font-size: 1.15rem; letter-spacing: 2px; }}
+    .cartao-aval .texto {{ font-style: italic; margin: 4px 0 6px; }}
+    .cartao-aval .quem {{ font-weight: 700; font-size: .88rem; }}
+    .rodape {{ background: {CARTAO_FUNDO}; border: {BORDA}; border-radius: {CANTOS}; box-shadow: {SOMBRA};
+        padding: 18px 22px 10px; margin-top: 28px; font-size: .9rem; }}
+    .rodape-grade {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }}
+    .rodape .t {{ font-weight: 800; color: {COR_TIT} !important; margin-bottom: 4px; }}
+    .rodape a {{ color: {COR} !important; }}
+    .rodape-selos {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }}
+    .rodape-selos span {{ background: #f1f5f9; border-radius: 999px; padding: 4px 12px; font-size: .8rem; font-weight: 600; }}
+    .rodape-fim {{ text-align: center; color: #64748b !important; font-size: .78rem; margin-top: 12px; }}
+    .wpp-flutuante {{ position: fixed; bottom: 78px; right: 20px; width: 58px; height: 58px; border-radius: 50%;
+        background: #25d366; display: flex; align-items: center; justify-content: center; z-index: 1001;
+        box-shadow: 0 6px 16px rgba(0,0,0,.28); transition: transform .2s; }}
+    .wpp-flutuante:hover {{ transform: scale(1.08); }}
     /* Foto clicável: o botão fica invisível por cima da foto inteira */
     [class*="st-key-fc_"] {{ position: relative !important; gap: 0 !important; }}
     [class*="st-key-fc_"] [data-testid="stElementContainer"]:has(.stButton),
@@ -815,7 +992,7 @@ def url_imagem_exemplo(categoria: str, numero: int) -> str:
 
 
 def url_segura(url: str, categoria: str, rotulo: str = "") -> str:
-    url = (url or "").strip()
+    url = resolver_imagem(url)
     return url if url else imagem_reserva(categoria, rotulo)
 
 
@@ -874,7 +1051,7 @@ def carregar_produtos() -> pd.DataFrame:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
     for c in ["estoque", "peso_g", "prazo_producao_dias"]:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
-    for c in ["ativo", "destaque"]:
+    for c in ["ativo", "destaque", "novidade", "mais_vendido"]:
         df[c] = df[c].astype(str).str.lower().isin(["true", "1", "sim", "verdadeiro"])
     return df
 
@@ -894,8 +1071,12 @@ def preco_atual(linha) -> tuple:
 
 
 def montar_catalogo(df: pd.DataFrame) -> dict:
+    """Só entram produtos visíveis (e, se a opção estiver ligada, com foto de verdade).
+    Categoria sem nenhum produto assim não aparece na loja."""
     catalogo = {}
     df = df[df["ativo"]].reset_index(drop=True)
+    if LOJA.get("esconder_sem_foto", True):
+        df = df[df.apply(tem_foto_propria, axis=1)].reset_index(drop=True) if len(df) else df
     for categoria, grupo in df.groupby("categoria", sort=False):
         itens = []
         for n, (_, linha) in enumerate(grupo.iterrows(), start=1):
@@ -905,7 +1086,7 @@ def montar_catalogo(df: pd.DataFrame) -> dict:
                 "categoria": categoria,
                 "nome": str(linha["modelo"]),
                 "preco": efetivo, "preco_cheio": float(linha["preco"]), "em_promo": em_promo,
-                "imagem": str(linha["imagem"]) or url_imagem_exemplo(categoria, n),
+                "imagem": resolver_imagem(linha["imagem"]) or url_imagem_exemplo(categoria, n),
                 "modelo_3d": MODELO_PADRAO,
                 "descricao": str(linha["descricao"]),
                 "para_que_serve": str(linha["para_que_serve"]),
@@ -916,6 +1097,7 @@ def montar_catalogo(df: pd.DataFrame) -> dict:
                 "estoque": int(linha["estoque"]),
                 "prazo": int(linha["prazo_producao_dias"]),
                 "sku": str(linha["sku"]),
+                "novidade": bool(linha["novidade"]), "mais_vendido": bool(linha["mais_vendido"]),
             })
         itens.sort(key=lambda i: not i["destaque"])  # destaques primeiro
         catalogo[categoria] = {
@@ -1553,8 +1735,8 @@ def abrir_produto(item: dict):
     with dir_:
         st.markdown(f"## {item['nome']}")
         st.caption(f"{item['categoria']}" + (f" · código {item['sku']}" if item["sku"] else ""))
-        if item["em_promo"]:
-            st.markdown(f"<span class='selo selo-promo'>PROMOÇÃO</span> <s>R$ {item['preco_cheio']:.2f}</s>",
+        if selos_do_item(item) or item["em_promo"]:
+            st.markdown(html_selos(item) + (f" <s>R$ {item['preco_cheio']:.2f}</s>" if item["em_promo"] else ""),
                         unsafe_allow_html=True)
         st.markdown(f"### R$ {item['preco']:.2f}")
         if item["descricao"]:
@@ -1575,12 +1757,13 @@ def abrir_produto(item: dict):
             st.radio("Tamanho / tipo", item["variacoes"], key=f"var_{item['id']}", horizontal=True)
         st.markdown("**🎨 Personalize do seu jeito**")
         k = item["id"]
+        st.text_input("✍️ Digite um nome ou frase e veja na prévia ao lado", key=f"ptxt_{k}", max_chars=40,
+                      placeholder="ex.: Maria")
         st.file_uploader("Ou envie a sua foto ou arte (até 3 MB)", type=["png", "jpg", "jpeg", "webp"],
                          key=f"arte_{k}", on_change=marcar_origem, args=(k, "upload"))
         c1, c2 = st.columns(2)
         c1.selectbox("Cor da peça", list(CORES_PECA), key=f"pcorpeca_{k}")
         c2.radio("Onde vai a arte", LADOS_PECA, key=f"plado_{k}")
-        st.text_input("Texto ou nome na peça (opcional)", key=f"ptxt_{k}")
         f1, f2 = st.columns(2)
         f1.selectbox("Estilo da letra", FONTES_PERSO, key=f"pfonte_{k}")
         f2.color_picker("Cor do texto", "#000000", key=f"pcor_{k}")
@@ -1601,23 +1784,32 @@ def abrir_produto(item: dict):
         texto = urllib.parse.quote(f"Olá! Tenho interesse no produto {item['nome']}. Pode me ajudar?")
         st.link_button("💬 Tirar dúvida no WhatsApp", f"https://wa.me/{LOJA['whatsapp']}?text={texto}",
                        use_container_width=True)
+    if LOJA.get("avaliacoes_ligadas", True):
+        do_produto = avaliacoes_aprovadas(item["nome"])[:3]
+        if do_produto:
+            st.markdown("**⭐ Quem comprou este produto diz**")
+            mostrar_avaliacoes(do_produto)
 # ===============================================================
 # ACOMPANHAR MEU PEDIDO (o cliente consulta)
 # ===============================================================
 @st.dialog("Acompanhar meu pedido", width="large")
 def abrir_acompanhamento():
-    st.write("Digite o número do pedido e o WhatsApp usado na compra.")
+    st.write("Digite o número do pedido para ver em que etapa ele está.")
     num = st.text_input("Número do pedido (ex.: PED-00001)", key="acomp_num").strip().upper()
-    tel = "".join(ch for ch in st.text_input("Seu WhatsApp", key="acomp_tel") if ch.isdigit())
+    if num.isdigit():
+        num = f"PED-{int(num):05d}"
+    tel = "".join(ch for ch in st.text_input("Seu WhatsApp (opcional: mostra rastreio, itens e nota fiscal)",
+                                             key="acomp_tel") if ch.isdigit())
     if not st.button("Consultar", type="primary", key="acomp_ok"):
         return
     pedidos = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
-    achado = pedidos[(pedidos["id_pedido"] == num) & (pedidos["telefone"].astype(str) == tel)]
+    achado = pedidos[pedidos["id_pedido"] == num]
     if achado.empty:
-        st.error("Não encontrei esse pedido. Confira o número e o WhatsApp.")
+        st.error("Não encontrei esse pedido. Confira o número (ele vem na mensagem do WhatsApp, ex.: PED-00012).")
         return
     p = achado.iloc[0]
-    st.success(f"Pedido {p['id_pedido']} de {p['data']}")
+    tel_ok = bool(tel) and str(p["telefone"]).strip() == tel
+    st.success(f"Pedido {p['id_pedido']} de {str(p['data'])[:10]}")
     if p["status"] == "Cancelado":
         st.error("Este pedido foi cancelado. Fale com a gente pelo WhatsApp.")
     else:
@@ -1628,6 +1820,12 @@ def abrir_acompanhamento():
             colunas[k].markdown(f"<div style='text-align:center'>{marca}<br><small>{etapa}</small></div>",
                                 unsafe_allow_html=True)
         st.progress((atual + 1) / len(ETAPAS_PEDIDO))
+    if not tel_ok:
+        if p["previsao_entrega"]:
+            st.info(f"📅 Previsão de entrega: **{p['previsao_entrega']}**")
+        st.caption("Para ver o rastreio, os itens e a nota fiscal, digite também o WhatsApp usado na compra."
+                   if not tel else "O WhatsApp não confere com o do pedido, então mostrei só a etapa.")
+        return
     d1, d2, d3 = st.columns(3)
     d1.metric("Pagamento", p["pagamento"] or "-")
     d2.metric("Previsão de entrega", p["previsao_entrega"] or "a definir")
@@ -2048,7 +2246,7 @@ conteúdo inflamável, explosivo, causador de combustão ou qualquer outro proib
 ARQUIVOS_DADOS = [ARQ_PRODUTOS, ARQ_CLIENTES, ARQ_PEDIDOS, ARQ_FRETE, ARQ_CLIQUES,
                   ARQ_LOJA, ARQ_APRESENTACOES, ARQ_VITRINE, ARQ_ARTES_PRONTAS,
                   ARQ_FORNECEDORES, ARQ_ESTOQUE, ARQ_COMPRAS, ARQ_MOVIMENTOS, ARQ_PRECOS, ARQ_HIST, ARQ_CHAT,
-                  ARQ_FOTOS_SEP]
+                  ARQ_FOTOS_SEP, ARQ_AVALIACOES]
 
 
 def _nomes_textos() -> list:
@@ -2070,7 +2268,7 @@ def _todos_binarios():
             for nome, dados in c.execute(_sql("SELECT nome, dados FROM binarios ORDER BY nome")):
                 yield nome, bytes(dados)
     else:
-        for pasta in (PASTA_ARTES, PASTA_FOTOS_SEP):
+        for pasta in (PASTA_ARTES, PASTA_FOTOS_SEP, PASTA_LOJA_IMG):
             if os.path.isdir(pasta):
                 for n in os.listdir(pasta):
                     if not n.endswith(".html"):
@@ -2097,7 +2295,7 @@ def gerar_backup_zip() -> bytes:
             for nome in os.listdir(PASTA_VIDEOS):
                 z.write(os.path.join(PASTA_VIDEOS, nome), arcname=f"{PASTA_VIDEOS}/{nome}")
         prod = ler_csv(ARQ_PRODUTOS, COLUNAS_PRODUTOS).copy()
-        prod["imagem"] = prod["imagem"].apply(lambda u: "(foto enviada)" if str(u).startswith("data:") else u)
+        prod["imagem"] = prod["imagem"].apply(lambda u: "(foto enviada)" if str(u).startswith(("data:", PREFIXO_BIN)) else u)
         z.writestr("LEIA-ME/produtos_para_excel.csv", prod.to_csv(index=False, sep=";").encode("utf-8-sig"))
         cli = ler_csv(ARQ_CLIENTES, COLUNAS_CLIENTES)
         z.writestr("LEIA-ME/clientes_para_excel.csv", cli.to_csv(index=False, sep=";").encode("utf-8-sig"))
@@ -2133,7 +2331,7 @@ def restaurar_backup_zip(arquivo) -> int:
                     _gravar_texto(nome, z.read(nome).decode("utf-8"))
                 else:
                     gravar_bin(nome, z.read(nome))
-            elif pasta == PASTA_FOTOS_SEP:
+            elif pasta in (PASTA_FOTOS_SEP, PASTA_LOJA_IMG):
                 gravar_bin(nome, z.read(nome))
             elif pasta == PASTA_VIDEOS:
                 os.makedirs(PASTA_VIDEOS, exist_ok=True)
@@ -2689,13 +2887,23 @@ def painel_conversas():
 
 # ===============================================================
 # SEPARADOR DE FOTOS (Gemini)
-# Você manda várias fotos misturadas; o Gemini diz de qual categoria é cada uma e a foto é guardada
-# na "pasta" daquela categoria no banco (Supabase). As categorias NÃO ficam no código: elas são lidas
-# na hora da lista de produtos do painel. Criou, mudou ou apagou uma categoria? O separador já segue.
-# Na dúvida, a foto vai para a pasta "Revisar".
+# Você manda várias fotos misturadas; o Gemini olha cada uma e escolhe a categoria mais parecida
+# entre as que existem no painel. As categorias NÃO ficam no código: são lidas na hora da lista de
+# produtos. A foto entra direto na categoria como um produto novo e já aparece na loja. Não há limite
+# de produtos por categoria. Na dúvida, a foto vai para a pasta "Revisar".
 # ===============================================================
 GEMINI_MODELOS = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash"]  # plano grátis
 FOTO_SEP_MAX_MB = 10
+MARCA_SEPARADOR = "Criado pelo separador de fotos"
+# Palavras de nome de arquivo que não dizem nada sobre o produto (câmera, WhatsApp, prints...)
+PALAVRAS_SEM_DICA = {
+    "img", "image", "imagem", "imagens", "foto", "fotos", "photo", "photos", "pic", "picture", "dsc", "dscn",
+    "dcim", "whatsapp", "screenshot", "captura", "tela", "print", "edit", "editada", "editado", "copy",
+    "copia", "final", "novo", "nova", "jpeg", "jpg", "png", "webp", "heic", "pxl", "mvimg", "burst", "sem",
+    "titulo", "untitled", "download", "file", "arquivo", "the", "and", "com", "para", "modelo", "produto",
+    "camera", "snapchat", "instagram", "telegram", "signal", "facebook", "insta", "stories", "story", "frame",
+    "scaled", "large", "small", "thumb", "original", "version", "versao", "cortada", "recorte",
+}
 
 
 class ErroGemini(Exception):
@@ -2712,21 +2920,35 @@ def categorias_do_painel() -> list:
     return sorted({str(c).strip() for c in df["categoria"].tolist() if str(c).strip()} - {PASTA_REVISAR})
 
 
+def dica_do_nome(nome_arquivo: str) -> str:
+    """Tira do nome do arquivo só as palavras que podem ajudar (ignora números, datas e nomes de câmera)."""
+    base = str(nome_arquivo or "").rsplit(".", 1)[0]
+    palavras = re.findall(r"[A-Za-zÀ-ÿ]+", base)
+    uteis = []
+    for p in palavras:
+        limpa = _sem_acento(p).lower()
+        if len(limpa) < 3 or limpa in PALAVRAS_SEM_DICA or not re.search(r"[aeiou]", limpa):
+            continue
+        if limpa not in [_sem_acento(u).lower() for u in uteis]:
+            uteis.append(p)
+    return " ".join(uteis[:6])
+
+
 def _pistas_categorias(categorias: list) -> str:
     """Monta, para o Gemini, uma linha por categoria com exemplos de produtos dela (ajuda a acertar)."""
     df = carregar_produtos()
     linhas = []
     for cat in categorias:
         grupo = df[df["categoria"].astype(str).str.strip() == cat]
-        modelos = ", ".join(grupo["modelo"].astype(str).head(4).tolist())
+        nomes = [m for m in grupo["modelo"].astype(str).tolist() if not re.search(r"Modelo \d+$", m)]
         desc = next((str(d) for d in grupo["descricao"].tolist() if str(d).strip()), "")[:160]
-        extra = "; ".join(x for x in [f"produtos: {modelos}" if modelos else "", desc] if x)
+        extra = "; ".join(x for x in [("produtos: " + ", ".join(nomes[:4])) if nomes else "", desc] if x)
         linhas.append(f"- {cat}" + (f" ({extra})" if extra else ""))
     return "\n".join(linhas)
 
 
-def preparar_foto(dados: bytes, lado_max: int) -> bytes:
-    """Gira a foto do jeito certo, tira transparência e diminui (foto menor = banco leve e Gemini rápido)."""
+def preparar_foto(dados: bytes, lado_max: int, qualidade: int = 82) -> bytes:
+    """Gira a foto do jeito certo, tira transparência e diminui (foto menor = loja rápida e banco leve)."""
     from PIL import Image, ImageOps
     img = Image.open(io.BytesIO(dados))
     img = ImageOps.exif_transpose(img)
@@ -2739,7 +2961,7 @@ def preparar_foto(dados: bytes, lado_max: int) -> bytes:
         img = img.convert("RGB")
     img.thumbnail((lado_max, lado_max))
     saida = io.BytesIO()
-    img.save(saida, "JPEG", quality=85, optimize=True)
+    img.save(saida, "JPEG", quality=qualidade, optimize=True)
     return saida.getvalue()
 
 
@@ -2752,18 +2974,24 @@ def _chamar_gemini(modelo: str, corpo: dict) -> dict:
         return json.loads(r.read().decode("utf-8"))
 
 
-def classificar_foto(jpeg: bytes, categorias: list) -> dict:
+def classificar_foto(jpeg: bytes, categorias: list, nome_arquivo: str = "") -> dict:
     """Pergunta ao Gemini de qual categoria é a foto. Devolve {categoria, confianca, motivo}."""
     import urllib.error
     opcoes = categorias + ["Nenhuma"]
+    dica = dica_do_nome(nome_arquivo)
     prompt = (
         "Você separa fotos de produtos de uma loja de presentes personalizados.\n"
         f"Categorias que existem hoje na loja:\n{_pistas_categorias(categorias)}\n\n"
-        "Olhe a foto e diga a qual categoria ela pertence, usando EXATAMENTE um dos nomes da lista. "
-        "Se a foto não for de nenhuma delas, responda \"Nenhuma\". "
-        "Em \"confianca\", dê um número de 0 a 1: perto de 1 só se tiver certeza; se ficar em dúvida entre "
-        "duas categorias ou a foto estiver ruim, dê um número baixo. "
-        "Em \"motivo\", explique em poucas palavras, em português, o que você viu na foto.")
+        "Olhe a FOTO e escolha a categoria MAIS PARECIDA com o produto que aparece nela, usando EXATAMENTE um "
+        "dos nomes da lista. O nome da categoria não precisa ser igual ao do produto: escolha a da mesma família "
+        "(por exemplo, chapéu, gorro ou boina vão para a categoria de bonés; xícara vai para canecas; regata ou "
+        "camiseta polo vão para camisetas; garrafa térmica vai para copos ou garrafas). "
+        "Só responda \"Nenhuma\" se o produto não tiver nada a ver com nenhuma categoria.\n"
+        + (f"O nome do arquivo tem as palavras \"{dica}\". Use isso só como dica: se a foto mostrar outra "
+           "coisa, vale a foto.\n" if dica else "")
+        + "Em \"confianca\", dê um número de 0 a 1: perto de 1 quando tiver certeza; se ficar em dúvida entre "
+        "duas categorias, se aparecerem produtos de categorias diferentes ou se a foto estiver ruim, dê um "
+        "número baixo. Em \"motivo\", diga em poucas palavras, em português, o que você viu na foto.")
     corpo = {
         "contents": [{"parts": [{"text": prompt},
                                 {"inline_data": {"mime_type": "image/jpeg",
@@ -2792,6 +3020,8 @@ def classificar_foto(jpeg: bytes, categorias: list) -> dict:
             except urllib.error.HTTPError as e:
                 texto = e.read().decode("utf-8", "ignore")
                 if e.code == 429:  # passou do limite por minuto do plano grátis: espera e tenta de novo
+                    if "PerDay" in texto or "per day" in texto.lower():
+                        raise ErroGemini("O limite grátis de hoje do Gemini acabou. Tente de novo amanhã.")
                     espera = 20
                     try:
                         for d in json.loads(texto)["error"].get("details", []):
@@ -2799,12 +3029,10 @@ def classificar_foto(jpeg: bytes, categorias: list) -> dict:
                                 espera = float(str(d["retryDelay"]).rstrip("s"))
                     except Exception:
                         pass
-                    if "PerDay" in texto or "per day" in texto.lower():
-                        raise ErroGemini("O limite grátis de hoje do Gemini acabou. Tente de novo amanhã.")
                     ultimo_erro = "limite por minuto do Gemini"
                     time.sleep(min(max(espera, 5), 60) + 1)
                     continue
-                if e.code in (400, 401, 403) and ("API key" in texto or "API_KEY" in texto or e.code != 400):
+                if e.code in (401, 403) or (e.code == 400 and ("API key" in texto or "API_KEY" in texto)):
                     raise ErroGemini("A chave GEMINI_API_KEY foi recusada pelo Google. Confira nos Secrets.")
                 if e.code in (500, 503):
                     ultimo_erro = "Gemini ocupado"
@@ -2817,8 +3045,7 @@ def classificar_foto(jpeg: bytes, categorias: list) -> dict:
                 time.sleep(3)
                 continue
             try:
-                texto = resp["candidates"][0]["content"]["parts"][0]["text"]
-                dados = json.loads(texto)
+                dados = json.loads(resp["candidates"][0]["content"]["parts"][0]["text"])
             except Exception:
                 ultimo_erro = "resposta vazia do Gemini"
                 break
@@ -2833,58 +3060,149 @@ def classificar_foto(jpeg: bytes, categorias: list) -> dict:
     raise ErroGemini(f"Não consegui falar com o Gemini ({ultimo_erro}).")
 
 
+# ---------------- Produtos das fotos (sem limite e sem vaga numerada) ----------------
+def _novo_produto(df: pd.DataFrame, cat: str, ref: str) -> dict:
+    """Linha de produto novo na categoria, com preço e descrição copiados do primeiro produto dela."""
+    grupo = df[df["categoria"].astype(str).str.strip() == cat]
+    existentes = set(df["modelo"].astype(str))
+    k = len(grupo) + 1
+    while f"{cat} Modelo {k}" in existentes:
+        k += 1
+    nova = {c: "" for c in COLUNAS_PRODUTOS}
+    if len(grupo):
+        base = grupo.iloc[0]
+        for c in ["preco", "descricao", "para_que_serve", "medidas", "dicas", "custo", "peso_g",
+                  "prazo_producao_dias", "variacoes", "tags"]:
+            nova[c] = base[c]
+    nova.update({"categoria": cat, "modelo": f"{cat} Modelo {k}", "imagem": ref, "ativo": "True",
+                 "destaque": "False", "estoque": "0", "preco_promocional": "0",
+                 "sku": f"{_sem_acento(cat)[:3].upper()}-{len(df) + 1:03d}", "obs_internas": MARCA_SEPARADOR})
+    return nova
+
+
+def colocar_na_categoria(cat: str, arquivo: str) -> str:
+    """A foto entra direto na categoria como um produto, já visível na loja. Sem limite por categoria.
+    Devolve o nome do produto."""
+    ref = PREFIXO_BIN + arquivo
+    with trava():
+        df = ler_csv(ARQ_PRODUTOS, COLUNAS_PRODUTOS)
+        m = df["imagem"].astype(str) == ref
+        do_sep = m & df["obs_internas"].astype(str).str.contains(MARCA_SEPARADOR, regex=False)
+        if do_sep.any():  # produto criado pelo separador: ele mesmo muda de categoria
+            i = df.index[do_sep][0]
+            df.at[i, "categoria"], df.at[i, "ativo"] = cat, "True"
+            gravar_csv(ARQ_PRODUTOS, df)
+            return str(df.at[i, "modelo"])
+        if m.any():
+            i = df.index[m][0]
+            if str(df.at[i, "categoria"]).strip() == cat:  # já está nessa categoria
+                df.at[i, "ativo"] = "True"
+                gravar_csv(ARQ_PRODUTOS, df)
+                return str(df.at[i, "modelo"])
+            df.loc[m, "imagem"] = ""  # a foto sai do produto antigo; o produto continua cadastrado
+        nova = _novo_produto(df, cat, ref)
+        gravar_csv(ARQ_PRODUTOS, pd.concat([df, pd.DataFrame([nova])], ignore_index=True))
+        return nova["modelo"]
+
+
+def tirar_da_loja(arquivo: str, apagar_foto: bool = False):
+    """Tira a foto da loja. Produto criado pelo separador fica escondido (não é apagado);
+    produto cadastrado à mão só perde a foto."""
+    ref = PREFIXO_BIN + arquivo
+    with trava():
+        df = ler_csv(ARQ_PRODUTOS, COLUNAS_PRODUTOS)
+        m = df["imagem"].astype(str) == ref
+        if not m.any():
+            return
+        do_sep = m & df["obs_internas"].astype(str).str.contains(MARCA_SEPARADOR, regex=False)
+        df.loc[do_sep, "ativo"] = "False"
+        df.loc[m & ~do_sep, "imagem"] = ""
+        if apagar_foto:
+            df.loc[do_sep, "imagem"] = ""
+        gravar_csv(ARQ_PRODUTOS, df)
+
+
 def ler_fotos_sep() -> list:
     return ler_json(ARQ_FOTOS_SEP, [])
 
 
-def apagar_bin(nome: str):
-    if URL_BANCO:
-        with _banco().begin() as c:
-            c.execute(_sql("DELETE FROM binarios WHERE nome = :n"), {"n": nome})
-    elif os.path.exists(nome):
-        os.remove(nome)
+def migrar_fotos_antigas() -> int:
+    """Fotos separadas pela primeira versão ficavam só na pasta, sem virar produto.
+    Aqui cada uma vira produto da categoria dela. Não apaga nada. Devolve quantas foram colocadas."""
+    lista = ler_fotos_sep()
+    pendentes = [f for f in lista if f.get("pasta") != PASTA_REVISAR and not f.get("modelo")]
+    if not pendentes:
+        return 0
+    df = carregar_produtos()
+    cats = {str(c).strip() for c in df["categoria"]}
+    refs = set(df["imagem"].astype(str))
+    feitas = 0
+    for f in pendentes:
+        if PREFIXO_BIN + f["arquivo"] in refs or f["pasta"] not in cats or not ler_bin(f["arquivo"]):
+            continue
+        modelo = colocar_na_categoria(f["pasta"], f["arquivo"])
+        _gravar_registro_sep(f["id"], {"modelo": modelo})
+        feitas += 1
+    return feitas
 
 
-def guardar_foto_sep(jpeg: bytes, nome_original: str, pasta: str, sugestao: str, confianca: float,
-                     motivo: str, hash_foto: str) -> dict:
-    fid = uuid.uuid4().hex[:12]
-    arquivo = f"{PASTA_FOTOS_SEP}/{fid}.jpg"
-    gravar_bin(arquivo, jpeg)
-    reg = {"id": fid, "pasta": pasta, "arquivo": arquivo, "nome": nome_original,
-           "data": datetime.now().strftime("%d/%m/%Y %H:%M"), "sugestao": sugestao,
-           "confianca": round(confianca, 2), "motivo": motivo, "hash": hash_foto}
-    with trava():
-        lista = ler_fotos_sep()
-        lista.append(reg)
-        gravar_json(ARQ_FOTOS_SEP, lista)
-    return reg
+def fotos_sep_agora() -> list:
+    """Lista das fotos com a situação de AGORA, olhando a lista de produtos. Se a categoria foi renomeada,
+    a foto acompanha; se o produto ou a categoria foi apagado, ela volta para o Revisar."""
+    df = carregar_produtos()
+    onde = {str(l["imagem"]): (str(l["categoria"]).strip(), str(l["modelo"]), bool(l["ativo"]))
+            for _, l in df.iterrows() if str(l["imagem"]).startswith(PREFIXO_BIN)}
+    saida = []
+    for f in ler_fotos_sep():
+        f = dict(f)
+        f.pop("espaco", None)
+        lugar = onde.get(PREFIXO_BIN + f["arquivo"])
+        if f["pasta"] != PASTA_REVISAR and lugar:
+            f["pasta"], f["modelo"], f["visivel"] = lugar
+        elif f["pasta"] != PASTA_REVISAR:
+            f["antes"] = f["pasta"]
+            f["pasta"] = PASTA_REVISAR
+            f["motivo"] = f"Estava em {f['antes']}, mas o produto ou a categoria foi apagado."
+        saida.append(f)
+    return saida
 
 
-def mover_fotos_sep(ids: set, pasta: str):
+def _gravar_registro_sep(fid: str, campos: dict):
     with trava():
         lista = ler_fotos_sep()
         for f in lista:
-            if f["id"] in ids:
-                f["pasta"] = pasta
+            if f["id"] == fid:
+                f.update(campos)
+                f.pop("espaco", None)
         gravar_json(ARQ_FOTOS_SEP, lista)
 
 
-def excluir_foto_sep(fid: str):
+def mover_foto_sep(f: dict, destino: str) -> str:
+    """Muda a foto de pasta. Devolve "" se deu certo."""
+    if destino == PASTA_REVISAR:
+        tirar_da_loja(f["arquivo"])
+        _gravar_registro_sep(f["id"], {"pasta": PASTA_REVISAR})
+        return ""
+    modelo = colocar_na_categoria(destino, f["arquivo"])
+    _gravar_registro_sep(f["id"], {"pasta": destino, "modelo": modelo})
+    return ""
+
+
+def excluir_foto_sep(f: dict):
+    tirar_da_loja(f["arquivo"], apagar_foto=True)
     with trava():
-        lista = ler_fotos_sep()
-        alvo = [f for f in lista if f["id"] == fid]
-        gravar_json(ARQ_FOTOS_SEP, [f for f in lista if f["id"] != fid])
-    for f in alvo:
-        apagar_bin(f["arquivo"])
+        gravar_json(ARQ_FOTOS_SEP, [x for x in ler_fotos_sep() if x["id"] != f["id"]])
+    apagar_bin(f["arquivo"])
 
 
-def separar_fotos(arquivos: list, limite: float, aviso=None) -> dict:
-    """Manda cada foto para o Gemini e guarda na pasta certa. Devolve um resumo do que aconteceu."""
+def separar_fotos(arquivos: list, limite: float) -> dict:
+    """Manda cada foto para o Gemini; a foto entra direto na categoria (vira produto) ou vai para o Revisar."""
     import hashlib
     categorias = categorias_do_painel()
     ja_tem = {f.get("hash") for f in ler_fotos_sep()}
-    resumo = {"total": len(arquivos), "por_pasta": {}, "repetidas": 0, "erros": []}
+    resumo = {"por_pasta": {}, "repetidas": 0, "erros": []}
     barra = st.progress(0.0, text="Começando...")
+    parar = ""
     for n, arq in enumerate(arquivos, start=1):
         barra.progress((n - 1) / len(arquivos), text=f"Foto {n} de {len(arquivos)}: {arq.name}")
         bruto = arq.getvalue()
@@ -2896,45 +3214,313 @@ def separar_fotos(arquivos: list, limite: float, aviso=None) -> dict:
             resumo["erros"].append(f"{arq.name}: passa de {FOTO_SEP_MAX_MB} MB")
             continue
         try:
-            guardar = preparar_foto(bruto, 1600)
-            pequena = preparar_foto(bruto, 768)
+            guardar = preparar_foto(bruto, 1000)   # tamanho bom para a loja, sem pesar
+            pequena = preparar_foto(bruto, 768)    # o Gemini não precisa de mais que isso
         except Exception:
             resumo["erros"].append(f"{arq.name}: não consegui abrir a imagem")
             continue
-        try:
-            r = classificar_foto(pequena, categorias)
-            cat, conf, motivo = r["categoria"], r["confianca"], r["motivo"]
-        except ErroGemini as e:
-            resumo["erros"].append(f"{arq.name}: {e}")
-            if "chave" in str(e).lower() or "hoje" in str(e).lower():
-                # sem chave ou sem cota: guarda o resto no Revisar para não perder as fotos
-                for resto in arquivos[n - 1:]:
-                    b = resto.getvalue()
-                    h = hashlib.sha1(b).hexdigest()
-                    if h in ja_tem or len(b) > FOTO_SEP_MAX_MB * 1024 * 1024:
-                        continue
-                    try:
-                        guardar_foto_sep(preparar_foto(b, 1600), resto.name, PASTA_REVISAR, "", 0.0,
-                                         "Não foi separada: " + str(e), h)
-                        ja_tem.add(h)
-                        resumo["por_pasta"][PASTA_REVISAR] = resumo["por_pasta"].get(PASTA_REVISAR, 0) + 1
-                    except Exception:
-                        pass
-                break
-            cat, conf, motivo = "", 0.0, f"O Gemini não respondeu ({e})"
-        if cat in categorias and conf >= limite:
-            pasta = cat
+        cat, conf, motivo = "", 0.0, ""
+        if parar:
+            motivo = "Não foi separada: " + parar
         else:
-            pasta = PASTA_REVISAR
-            if cat not in categorias:
-                motivo = (motivo + " · " if motivo else "") + "não parece ser de nenhuma categoria"
-            else:
-                motivo = (motivo + " · " if motivo else "") + f"certeza baixa ({conf:.0%})"
-        guardar_foto_sep(guardar, arq.name, pasta, cat if cat in categorias else "", conf, motivo, hash_foto)
+            try:
+                r = classificar_foto(pequena, categorias, arq.name)
+                cat, conf, motivo = r["categoria"], r["confianca"], r["motivo"]
+            except ErroGemini as e:
+                if "chave" in str(e).lower() or "hoje" in str(e).lower():
+                    parar = str(e)  # sem chave ou sem cota: o resto vai para o Revisar, nada se perde
+                    resumo["erros"].append(str(e))
+                motivo = f"O Gemini não respondeu ({e})"
+        fid = uuid.uuid4().hex[:12]
+        arquivo = f"{PASTA_FOTOS_SEP}/{fid}.jpg"
+        gravar_bin(arquivo, guardar)
+        reg = {"id": fid, "pasta": PASTA_REVISAR, "arquivo": arquivo, "nome": arq.name,
+               "data": datetime.now().strftime("%d/%m/%Y %H:%M"), "sugestao": cat if cat in categorias else "",
+               "confianca": round(conf, 2), "motivo": motivo, "hash": hash_foto}
+        if cat in categorias and conf >= limite:
+            reg.update(pasta=cat, modelo=colocar_na_categoria(cat, arquivo))
+        elif not parar and motivo and not motivo.startswith("O Gemini"):
+            reg["motivo"] = motivo + " · " + (f"certeza baixa ({conf:.0%})" if cat in categorias
+                                              else "não parece ser de nenhuma categoria")
+        with trava():
+            lista = ler_fotos_sep()
+            lista.append(reg)
+            gravar_json(ARQ_FOTOS_SEP, lista)
         ja_tem.add(hash_foto)
-        resumo["por_pasta"][pasta] = resumo["por_pasta"].get(pasta, 0) + 1
+        resumo["por_pasta"][reg["pasta"]] = resumo["por_pasta"].get(reg["pasta"], 0) + 1
     barra.progress(1.0, text="Pronto!")
     return resumo
+
+
+# ===============================================================
+# LOJA: APARÊNCIA, VENDAS E CONFIANÇA (tudo editável no painel, nada pago)
+# ===============================================================
+def salvar_imagem_loja(arquivo, nome: str, lado: int, transparente: bool = False) -> str:
+    """Diminui e guarda no banco uma imagem da loja (logo, fundo, Quem somos). Devolve o nome guardado."""
+    from PIL import Image, ImageOps
+    bruto = arquivo.getvalue()
+    if transparente:  # logo: mantém o fundo transparente
+        img = ImageOps.exif_transpose(Image.open(io.BytesIO(bruto))).convert("RGBA")
+        img.thumbnail((lado, lado))
+        buf = io.BytesIO()
+        img.save(buf, "PNG", optimize=True)
+        dados, ext = buf.getvalue(), "png"
+    else:
+        dados, ext = preparar_foto(bruto, lado, 78), "jpg"
+    caminho = f"{PASTA_LOJA_IMG}/{nome}_{uuid.uuid4().hex[:8]}.{ext}"
+    gravar_bin(caminho, dados)
+    return caminho
+
+
+def trocar_imagem_loja(chave: str, arquivo, lado: int, transparente: bool = False):
+    """Guarda a imagem nova na configuração da loja e apaga a antiga."""
+    antiga = LOJA.get(chave, "")
+    LOJA[chave] = salvar_imagem_loja(arquivo, chave, lado, transparente) if arquivo is not None else ""
+    if antiga:
+        apagar_bin(antiga)
+
+
+# ---------------- Banners de promoção e datas especiais ----------------
+def _domingo(ano: int, mes: int, n: int):
+    """O n-ésimo domingo do mês."""
+    d = datetime(ano, mes, 1)
+    d += timedelta(days=(6 - d.weekday()) % 7)
+    return d + timedelta(weeks=n - 1)
+
+
+def _pascoa(ano: int):
+    a, b, c = ano % 19, ano // 100, ano % 100
+    d, e = b // 4, b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    l_ = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l_) // 451
+    return datetime(ano, (h + l_ - 7 * m + 114) // 31, ((h + l_ - 7 * m + 114) % 31) + 1)
+
+
+def datas_especiais(ano: int) -> list:
+    """Datas boas para vender presente personalizado: (nome, dia, texto pronto do banner)."""
+    quinta = datetime(ano, 11, 1) + timedelta(days=(3 - datetime(ano, 11, 1).weekday()) % 7 + 21)
+    return [
+        ("Dia da Mulher", datetime(ano, 3, 8), "💐 Dia da Mulher: presentes personalizados para quem você admira!"),
+        ("Páscoa", _pascoa(ano), "🐰 Páscoa chegando: kits personalizados para presentear!"),
+        ("Dia das Mães", _domingo(ano, 5, 2), "💐 Dia das Mães: presentes com foto e nome. Peça com antecedência!"),
+        ("Dia dos Namorados", datetime(ano, 6, 12), "❤️ Dia dos Namorados: canecas e presentes com a foto de vocês!"),
+        ("Dia dos Pais", _domingo(ano, 8, 2), "👔 Dia dos Pais: presente personalizado que ele vai usar todo dia!"),
+        ("Dia do Cliente", datetime(ano, 9, 15), "🎁 Dia do Cliente: condição especial para você!"),
+        ("Dia das Crianças", datetime(ano, 10, 12), "🧸 Dia das Crianças: presentes com o nome da criançada!"),
+        ("Dia dos Professores", datetime(ano, 10, 15), "🍎 Dia dos Professores: lembrancinhas personalizadas!"),
+        ("Black Friday", quinta + timedelta(days=1), "🖤 Black Friday: descontos em toda a loja!"),
+        ("Natal", datetime(ano, 12, 25), "🎄 Natal: presentes personalizados. Garanta o seu a tempo!"),
+    ]
+
+
+def banners_ativos() -> list:
+    hoje = datetime.now().strftime("%Y-%m-%d")
+    saida = []
+    for b in LOJA.get("banners") or []:
+        ini, fim = str(b.get("inicio") or "")[:10], str(b.get("fim") or "")[:10]
+        if b.get("ativo", True) and str(b.get("texto", "")).strip() and (not ini or ini <= hoje) and (not fim or hoje <= fim):
+            saida.append(b)
+    return saida
+
+
+def html_banners() -> str:
+    partes = ""
+    for b in banners_ativos():
+        cor = cor_ok(b.get("cor"), "#dc2626")
+        texto = html.escape(str(b["texto"]))
+        partes += (f"<div class='faixa-promo' style='background:{cor};'>{texto}</div>")
+    return partes
+
+
+# ---------------- Selos dos produtos ----------------
+_MEMO_MV = {}
+
+
+def nomes_mais_vendidos() -> set:
+    """Os produtos que mais saíram nos pedidos (para o selo automático de Mais vendido)."""
+    if not LOJA.get("selo_mais_vendido_auto", True):
+        return set()
+    pedidos = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
+    qtd = int(LOJA.get("selo_mais_vendido_qtd", 5) or 5)
+    chave = (len(pedidos), str(pedidos["id_pedido"].iloc[-1]) if len(pedidos) else "", qtd)
+    if chave not in _MEMO_MV:
+        conta = {}
+        for _, p in pedidos.iterrows():
+            if p["status"] == "Cancelado":
+                continue
+            for it in itens_do_pedido(p):
+                nome = str(it.get("nome", "")).split(" (")[0].strip()
+                try:
+                    conta[nome] = conta.get(nome, 0) + int(float(it.get("quantidade", 1) or 1))
+                except Exception:
+                    pass
+        _MEMO_MV.clear()
+        _MEMO_MV[chave] = {n for n, _ in sorted(conta.items(), key=lambda x: -x[1])[:qtd]}
+    return _MEMO_MV[chave]
+
+
+def selos_do_item(item: dict) -> list:
+    selos = []
+    if item.get("novidade"):
+        selos.append(("Novidade", "selo-novo"))
+    if item.get("mais_vendido") or item["nome"] in nomes_mais_vendidos():
+        selos.append(("Mais vendido", "selo-top"))
+    if item.get("em_promo"):
+        selos.append(("Promoção", "selo-promo"))
+    return selos
+
+
+def html_selos(item: dict) -> str:
+    return " ".join(f"<span class='selo {classe}'>{nome}</span>" for nome, classe in selos_do_item(item))
+
+
+# ---------------- Avaliações e fotos de clientes ----------------
+def ler_avaliacoes() -> list:
+    return ler_json(ARQ_AVALIACOES, [])
+
+
+def avaliacoes_aprovadas(produto: str = "") -> list:
+    lista = [a for a in ler_avaliacoes() if a.get("status") == "aprovada"]
+    if produto:
+        lista = [a for a in lista if a.get("produto") == produto]
+    return list(reversed(lista))
+
+
+def estrelas(n) -> str:
+    n = max(0, min(int(n or 0), 5))
+    return "★" * n + "☆" * (5 - n)
+
+
+def html_avaliacao(a: dict) -> str:
+    foto = imagem_do_banco(a.get("foto", "")) if a.get("foto") else ""
+    img = (f"<img src='{foto}' style='width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:10px;"
+           "margin-bottom:6px;'>") if foto else ""
+    quem = html.escape(a.get("nome", "Cliente")) + (f" · {html.escape(a['cidade'])}" if a.get("cidade") else "")
+    prod = f"<div style='font-size:.78rem;color:#64748b;'>Comprou: {html.escape(a['produto'])}</div>" if a.get("produto") else ""
+    return (f"<div class='cartao-aval'>{img}<div class='estrelas'>{estrelas(a.get('nota', 5))}</div>"
+            f"<div class='texto'>“{html.escape(a.get('texto', ''))}”</div>"
+            f"<div class='quem'>{quem}</div>{prod}</div>")
+
+
+def mostrar_avaliacoes(lista: list, colunas: int = 3):
+    for ini in range(0, len(lista), colunas):
+        for col, a in zip(st.columns(colunas), lista[ini:ini + colunas]):
+            col.markdown(html_avaliacao(a), unsafe_allow_html=True)
+
+
+@st.dialog("Avaliar a loja", width="large")
+def abrir_avaliacao():
+    if st.session_state.get("avaliou"):
+        st.success("💜 Obrigado pela sua avaliação! Ela aparece na loja assim que for aprovada.")
+        return
+    st.write("Conte como foi a sua compra. A sua avaliação aparece na loja depois que a gente aprovar.")
+    c1, c2 = st.columns(2)
+    nome = c1.text_input("Seu nome", key="av_nome", max_chars=60)
+    cidade = c2.text_input("Sua cidade (opcional)", key="av_cidade", max_chars=60)
+    st.caption("Sua nota")
+    nota = st.feedback("stars", key="av_nota")
+    nomes = sorted({it["nome"] for d in CATALOGO.values() for it in d["itens"]})
+    produto = st.selectbox("Qual produto você comprou? (opcional)", ["—"] + nomes, key="av_prod")
+    texto = st.text_area("Sua opinião", key="av_texto", max_chars=600, height=110)
+    foto = st.file_uploader("Foto do produto que você recebeu (opcional, até 3 MB)", type=["png", "jpg", "jpeg", "webp"],
+                            key="av_foto")
+    if st.button("Enviar avaliação", type="primary", key="av_enviar"):
+        if len(nome.strip()) < 2 or len(texto.strip()) < 5 or nota is None:
+            st.error("Preencha o seu nome, a nota (estrelas) e a sua opinião.")
+            return
+        if foto is not None and foto.size > 3 * 1024 * 1024:
+            st.error("A foto passa de 3 MB.")
+            return
+        aid = uuid.uuid4().hex[:10]
+        caminho = ""
+        if foto is not None:
+            try:
+                caminho = f"{PASTA_LOJA_IMG}/aval_{aid}.jpg"
+                gravar_bin(caminho, preparar_foto(foto.getvalue(), 900, 78))
+            except Exception:
+                caminho = ""
+        with trava():
+            lista = ler_avaliacoes()
+            lista.append({"id": aid, "data": datetime.now().strftime("%d/%m/%Y %H:%M"), "nome": nome.strip(),
+                          "cidade": cidade.strip(), "nota": int(nota) + 1, "texto": texto.strip(),
+                          "produto": "" if produto == "—" else produto, "foto": caminho, "status": "pendente"})
+            gravar_json(ARQ_AVALIACOES, lista)
+        st.session_state.avaliou = True
+        st.rerun()
+
+
+# ---------------- Confiança: selos, contador e rodapé ----------------
+def pedidos_entregues() -> int:
+    pedidos = ler_csv(ARQ_PEDIDOS, COLUNAS_PEDIDOS)
+    return int((pedidos["status"] == "Entregue").sum()) + int(LOJA.get("contador_extra", 0) or 0)
+
+
+def html_faixa_confianca() -> str:
+    itens = []
+    if LOJA.get("selos_confianca", True):
+        itens += [html.escape(str(LOJA.get(k, ""))) for k in ("selo_1", "selo_2") if str(LOJA.get(k, "")).strip()]
+    if LOJA.get("contador_entregues", True):
+        n = pedidos_entregues()
+        if n > 0:
+            itens.append(f"📦 <b>{n:,}</b>".replace(",", ".") + f" pedido{'s' if n != 1 else ''} entregue{'s' if n != 1 else ''}")
+    aprov = avaliacoes_aprovadas() if LOJA.get("avaliacoes_ligadas", True) else []
+    if aprov:
+        media = sum(int(a.get("nota", 5)) for a in aprov) / len(aprov)
+        itens.append(f"⭐ <b>{media:.1f}</b> de 5 ({len(aprov)} {'avaliações' if len(aprov) != 1 else 'avaliação'})")
+    if not itens:
+        return ""
+    return "<div class='faixa-confianca'>" + "".join(f"<span>{i}</span>" for i in itens) + "</div>"
+
+
+def link_wpp(msg: str = "") -> str:
+    numero = "".join(ch for ch in str(LOJA.get("whatsapp", "")) if ch.isdigit())
+    if not numero:
+        return ""
+    return f"https://wa.me/{numero}" + (f"?text={urllib.parse.quote(msg)}" if msg else "")
+
+
+def html_rodape() -> str:
+    nome = html.escape(LOJA.get("nome_empresa", ""))
+    cnpj = html.escape(LOJA.get("rodape_cnpj") or LOJA.get("fiscal_cnpj") or "")
+    cidade = html.escape(LOJA.get("rodape_cidade") or LOJA.get("fiscal_cidade_uf") or "")
+    email = html.escape(LOJA.get("rodape_email", ""))
+    horario = html.escape(LOJA.get("rodape_horario") or texto_horario())
+    numero = "".join(ch for ch in str(LOJA.get("whatsapp", "")) if ch.isdigit())
+    wpp_txt = (f"({numero[2:4]}) {numero[4:-4]}-{numero[-4:]}" if len(numero) >= 12 and numero.startswith("55")
+               else numero)
+    contato = ""
+    if numero:
+        contato += f"<div>💬 WhatsApp: <a href='{html.escape(link_wpp(), quote=True)}' target='_blank'>{wpp_txt}</a></div>"
+    if email:
+        contato += f"<div>✉️ <a href='mailto:{email}'>{email}</a></div>"
+    selos = "".join(f"<span>{html.escape(str(LOJA.get(k, '')))}</span>" for k in ("selo_1", "selo_2")
+                    if LOJA.get("selos_confianca", True) and str(LOJA.get(k, "")).strip())
+    return (
+        "<div class='rodape'><div class='rodape-grade'>"
+        f"<div><div class='t'>{nome}</div>" + (f"<div>CNPJ: {cnpj}</div>" if cnpj else "")
+        + (f"<div>📍 {cidade}</div>" if cidade else "") + "</div>"
+        f"<div><div class='t'>Fale com a gente</div>{contato or '<div>—</div>'}</div>"
+        f"<div><div class='t'>Horário de atendimento</div><div>🕐 {horario}</div></div>"
+        "</div>" + (f"<div class='rodape-selos'>{selos}</div>" if selos else "")
+        + f"<div class='rodape-fim'>© {datetime.now().year} {nome}. Todos os direitos reservados.</div></div>")
+
+
+def html_wpp_flutuante() -> str:
+    link = link_wpp(LOJA.get("wpp_flutuante_msg", ""))
+    if not (LOJA.get("wpp_flutuante", True) and link):
+        return ""
+    icone = ("<svg viewBox='0 0 32 32' width='30' height='30' fill='#fff'><path d='M16 3C9 3 3.3 8.6 3.3 15.5c0 2.4.7 "
+             "4.7 2 6.7L3.2 29l7-1.9c1.9 1 4 1.6 5.8 1.6 7 0 12.7-5.6 12.7-12.6S23 3 16 3zm0 23.1c-1.9 0-3.8-.5-5.4-1.5l-.4-.2-4.1"
+             " 1.1 1.1-4-.3-.4a10.3 10.3 0 01-1.6-5.6C5.3 9.8 10.1 5.1 16 5.1s10.7 4.7 10.7 10.5S21.9 26.1 16 26.1zm5.9-7.8c-.3-.2"
+             "-1.9-.9-2.2-1-.3-.1-.5-.2-.7.2l-1 1.2c-.2.2-.4.2-.7.1-.3-.2-1.4-.5-2.6-1.6-1-.9-1.6-1.9-1.8-2.2-.2-.3 0-.5.1-.7l.5-.6"
+             ".3-.5c.1-.2 0-.4 0-.5l-1-2.4c-.3-.6-.5-.5-.7-.5h-.6c-.2 0-.5.1-.8.4-.3.3-1 1-1 2.5s1.1 2.9 1.2 3.1c.2.2 2.1 3.3 5.2"
+             " 4.6.7.3 1.3.5 1.8.6.7.2 1.4.2 1.9.1.6-.1 1.9-.8 2.1-1.5.3-.7.3-1.4.2-1.5-.1-.2-.3-.2-.6-.4z'/></svg>")
+    return (f"<a class='wpp-flutuante' href='{html.escape(link, quote=True)}' target='_blank' "
+            f"title='Falar no WhatsApp'>{icone}</a>")
 
 
 # ===============================================================
@@ -2946,6 +3532,7 @@ SECOES_ADMIN = {
     "VENDAS": ["💬 Chat ao vivo", "👥 Clientes", "🧾 Pedidos", "🚚 Rastreio", "🏷️ Etiquetas", "🖨️ Artes", "📄 Nota fiscal", "📍 Frete"],
     "COMPRAS": ["🏭 Estoque e compras"],
     "MARKETING": ["🏢 Apresentações", "🎬 Vitrine", "👁️ Interesse"],
+    "LOJA ONLINE": ["🖌️ Aparência da loja", "📣 Promoções e selos", "⭐ Avaliações", "🤝 Confiança e rodapé"],
     "CONFIGURAÇÃO": ["🎨 Loja e redes", "💾 Backup"],
 }
 if st.session_state.admin:
@@ -2983,6 +3570,16 @@ if st.session_state.admin:
         st.warning("⚠️ Banco de dados não configurado: os dados estão ficando em arquivos e podem sumir quando o "
                    "app reiniciar. Coloque o endereço do Supabase nos Secrets do Streamlit.")
     aviso_chat_admin()
+    if not st.session_state.get("fotos_antigas_ok"):
+        st.session_state.fotos_antigas_ok = True
+        _migradas = migrar_fotos_antigas()
+        if _migradas:
+            st.success(f"🗂️ {_migradas} foto(s) que já estavam separadas entraram nas categorias como produtos.")
+    _pend_av = sum(1 for a in ler_avaliacoes() if a.get("status") == "pendente")
+    if _pend_av and secao != "⭐ Avaliações":
+        av1, av2 = st.columns([4, 1])
+        av1.info(f"⭐ {_pend_av} avaliação(ões) de cliente esperando a sua aprovação.")
+        av2.button("Ver avaliações", key="aviso_aval", use_container_width=True, on_click=ir_secao, args=("⭐ Avaliações",))
 
     # ---------------------------------------------------------- MESA DO CHEFE
     if secao == "🔨 Mesa do chefe":
@@ -3318,6 +3915,16 @@ O WhatsApp não deixa a loja responder por você, mas o próprio WhatsApp Busine
                      index=list(op_loja).index(cols_loja) if cols_loja in op_loja else 0,
                      on_change=salvar_pref, args=("loja_grade_colunas", "loja_cols"))
         COLS_ADM = int(st.session_state.get("adm_cols", cols_adm))
+        sem_foto = int((df_produtos["ativo"] & ~df_produtos.apply(tem_foto_propria, axis=1)).sum()) if len(df_produtos) else 0
+        esc = st.checkbox("Mostrar na loja só produtos com foto de verdade (esconde os sem foto e os de foto de exemplo, "
+                          "sem apagar nada)", value=bool(LOJA.get("esconder_sem_foto", True)), key="esc_sem_foto")
+        if esc != bool(LOJA.get("esconder_sem_foto", True)):
+            LOJA["esconder_sem_foto"] = bool(esc)
+            gravar_loja(LOJA)
+            st.rerun()
+        if esc and sem_foto:
+            st.caption(f"🙈 {sem_foto} produto(s) visível(is) estão sem foto própria e por isso não aparecem na loja. "
+                       "Coloque a foto em 🖼️ Fotos ou pelo 🗂️ Separador de fotos.")
 
         f1, f2, f3, f4 = st.columns([2, 2, 1, 1])
         busca_p = f1.text_input("🔎 Buscar produto", key="busca_prod")
@@ -3383,7 +3990,7 @@ O WhatsApp não deixa a loja responder por você, mas o próprio WhatsApp Busine
                     e_nome = st.text_input("Nome do modelo", value=ed["modelo"])
                     e_preco = st.number_input("Preço (R$)", min_value=0.0, value=float(ed["preco"]), step=1.0)
                     e_img = st.text_input("Foto (link). Para enviar do computador use a seção Fotos",
-                                          value="" if str(ed["imagem"]).startswith("data:") else ed["imagem"])
+                                          value="" if str(ed["imagem"]).startswith(("data:", PREFIXO_BIN)) else ed["imagem"])
                     e_ativo = st.checkbox("Visível ao cliente", value=bool(ed["ativo"]))
                     e_dest = st.checkbox("Destaque (aparece primeiro)", value=bool(ed["destaque"]))
                 with tab_b:
@@ -3476,26 +4083,29 @@ O WhatsApp não deixa a loja responder por você, mas o próprio WhatsApp Busine
                     st.error("A foto passa de 2 MB.")
     # ---------------------------------------------------------- SEPARADOR DE FOTOS (Gemini)
     elif secao == "🗂️ Separador de fotos":
-        st.caption("Envie várias fotos misturadas de uma vez. O Gemini olha cada uma, descobre a categoria e "
-                   "guarda na pasta certa. Na dúvida, a foto vai para a pasta **Revisar**.")
+        st.caption("Envie várias fotos misturadas de uma vez. O Gemini olha cada foto, escolhe a categoria mais "
+                   "parecida e a foto entra direto nela como um produto, já aparecendo na loja. Não tem limite de "
+                   "produtos por categoria. Na dúvida, a foto vai para a pasta **Revisar**.")
         cats_sep = categorias_do_painel()
-        fotos_sep = ler_fotos_sep()
+        fotos_sep = fotos_sep_agora()
+        df_cat = carregar_produtos()
+        esconder = bool(LOJA.get("esconder_sem_foto", True))
         if not chave_gemini():
             st.error("🔑 Falta a chave do Gemini. No Streamlit, abra Settings → Secrets e acrescente uma linha: "
                      "`GEMINI_API_KEY = \"sua-chave\"` (a chave grátis sai em aistudio.google.com).")
         if not cats_sep:
             st.info("Você ainda não tem categorias. Crie em 📦 Produtos → Nova categoria.")
-        else:
-            st.markdown("**Categorias que o separador usa agora** (vêm do seu painel de Produtos; mudou lá, "
-                        "muda aqui sozinho): " + " · ".join(f"`{c}`" for c in cats_sep))
         if st.session_state.get("sep_resumo"):
             r = st.session_state.pop("sep_resumo")
             partes = [f"**{p}**: {q}" for p, q in sorted(r["por_pasta"].items(), key=lambda x: x[0] == PASTA_REVISAR)]
-            st.success(f"✅ {sum(r['por_pasta'].values())} foto(s) separada(s). " + " · ".join(partes))
-            if r["repetidas"]:
-                st.info(f"♻️ {r['repetidas']} foto(s) já tinham sido separadas antes e foram puladas.")
-            for e in r["erros"]:
+            if partes:
+                st.success(f"✅ {sum(r['por_pasta'].values())} foto(s) guardada(s). " + " · ".join(partes))
+            if r.get("repetidas"):
+                st.info(f"♻️ {r['repetidas']} foto(s) já tinham sido enviadas antes e foram puladas.")
+            for e in r.get("erros", []):
                 st.warning(e)
+            if r.get("aviso"):
+                st.info(r["aviso"])
 
         with st.container(border=True):
             limite_sep = st.slider("Certeza mínima para separar sozinho (abaixo disso vai para Revisar)",
@@ -3504,6 +4114,7 @@ O WhatsApp não deixa a loja responder por você, mas o próprio WhatsApp Busine
             if limite_sep != int(LOJA.get("separador_certeza", 80)):
                 LOJA["separador_certeza"] = int(limite_sep)
                 gravar_loja(LOJA)
+                st.rerun()
             with st.form("form_separador", clear_on_submit=True):
                 sep_arqs = st.file_uploader(f"Fotos (pode escolher várias de uma vez, até {FOTO_SEP_MAX_MB} MB cada)",
                                             type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
@@ -3518,102 +4129,422 @@ O WhatsApp não deixa a loja responder por você, mas o próprio WhatsApp Busine
 
         # ----- Pastas -----
         titulo_secao("📁 Pastas")
-        # Foto de categoria que foi apagada ou renomeada volta para o Revisar automaticamente
-        orfas = [f for f in fotos_sep if f["pasta"] != PASTA_REVISAR and f["pasta"] not in cats_sep]
-        contagem = {c: sum(1 for f in fotos_sep if f["pasta"] == c) for c in cats_sep}
-        n_revisar = sum(1 for f in fotos_sep if f["pasta"] == PASTA_REVISAR) + len(orfas)
-        rotulos = {f"⚠️ {PASTA_REVISAR} ({n_revisar})": PASTA_REVISAR}
-        rotulos.update({f"📁 {c} ({contagem[c]})": c for c in cats_sep})
-        escolha = st.selectbox("Abrir pasta", list(rotulos), key="sep_pasta")
-        pasta_ver = rotulos[escolha]
+        st.caption("As categorias vêm do seu painel de Produtos: criou, renomeou ou apagou lá, muda aqui sozinho.")
+        revisar = [f for f in fotos_sep if f["pasta"] == PASTA_REVISAR]
+        qtd_cat = df_cat["categoria"].astype(str).str.strip().value_counts().to_dict()
+        rotulos = {f"⚠️ {PASTA_REVISAR} ({len(revisar)})": PASTA_REVISAR}
+        rotulos.update({f"📁 {c} ({qtd_cat.get(c, 0)} produto{'s' if qtd_cat.get(c, 0) != 1 else ''})": c
+                        for c in cats_sep})
+        pasta_ver = rotulos[st.selectbox("Abrir pasta", list(rotulos), key="sep_pasta")]
         destinos = cats_sep + [PASTA_REVISAR]
 
+        def _mover_e_avisar(foto, destino):
+            erro = mover_foto_sep(foto, destino)
+            if erro:
+                st.session_state.sep_resumo = {"por_pasta": {}, "erros": [erro]}
+            st.rerun()
+
         if pasta_ver == PASTA_REVISAR:
-            mostrar_sep = [f for f in fotos_sep if f["pasta"] == PASTA_REVISAR] + orfas
-            for antiga in sorted({f["pasta"] for f in orfas}):
-                ids_antiga = {f["id"] for f in orfas if f["pasta"] == antiga}
+            antigas = sorted({f["antes"] for f in revisar if f.get("antes")})
+            for antiga in antigas:
+                grupo = [f for f in revisar if f.get("antes") == antiga]
                 with st.container(border=True):
                     o1, o2, o3 = st.columns([3, 2, 1])
-                    o1.markdown(f"🗃️ **{len(ids_antiga)} foto(s)** da categoria **{antiga}**, que não existe mais "
-                                "(foi apagada ou renomeada).")
+                    o1.markdown(f"🗃️ **{len(grupo)} foto(s)** que estavam em **{antiga}**, mas o produto ou a "
+                                "categoria foi apagado.")
                     novo = o2.selectbox("Mover todas para", cats_sep, key=f"sep_orf_{antiga}",
                                         label_visibility="collapsed") if cats_sep else None
                     if novo and o3.button("Mover todas", key=f"sep_orf_btn_{antiga}", use_container_width=True):
-                        mover_fotos_sep(ids_antiga, novo)
+                        erros = [e for e in (mover_foto_sep(f, novo) for f in grupo) if e]
+                        st.session_state.sep_resumo = {"por_pasta": {}, "erros": sorted(set(erros))}
                         st.rerun()
-            pendentes = [f for f in mostrar_sep if cats_sep]
-            if pendentes and chave_gemini():
-                if st.button(f"🔁 Pedir para o Gemini tentar de novo as {len(pendentes)} foto(s) do Revisar",
+            if revisar and cats_sep and chave_gemini():
+                if st.button(f"🔁 Pedir para o Gemini tentar de novo as {len(revisar)} foto(s) do Revisar",
                              key="sep_retentar"):
                     movidas, barra = 0, st.progress(0.0)
-                    for n, f in enumerate(pendentes, start=1):
-                        barra.progress(n / len(pendentes), text=f"Foto {n} de {len(pendentes)}")
+                    for n, f in enumerate(revisar, start=1):
+                        barra.progress(n / len(revisar), text=f"Foto {n} de {len(revisar)}")
                         try:
-                            bruto = ler_bin(f["arquivo"])
-                            r = classificar_foto(preparar_foto(bruto, 768), cats_sep)
+                            r = classificar_foto(preparar_foto(ler_bin(f["arquivo"]), 768), cats_sep, f.get("nome", ""))
                         except ErroGemini as e:
-                            st.warning(str(e))
+                            st.session_state.sep_resumo = {"por_pasta": {}, "erros": [str(e)]}
                             break
                         except Exception:
                             continue
                         if r["categoria"] in cats_sep and r["confianca"] >= limite_sep / 100:
-                            mover_fotos_sep({f["id"]}, r["categoria"])
-                            movidas += 1
-                    st.session_state.sep_resumo = {"por_pasta": {"saíram do Revisar": movidas},
-                                                   "repetidas": 0, "erros": []}
+                            if not mover_foto_sep(f, r["categoria"]):
+                                movidas += 1
+                        else:
+                            _gravar_registro_sep(f["id"], {"sugestao": r["categoria"] if r["categoria"] in cats_sep else "",
+                                                           "confianca": round(r["confianca"], 2), "motivo": r["motivo"]})
+                    if "sep_resumo" not in st.session_state:
+                        st.session_state.sep_resumo = {"por_pasta": {}, "erros": []}
+                    st.session_state.sep_resumo["aviso"] = f"🔁 {movidas} foto(s) saíram do Revisar."
                     st.rerun()
-        else:
-            mostrar_sep = [f for f in fotos_sep if f["pasta"] == pasta_ver]
-
-        mostrar_sep = list(reversed(mostrar_sep))  # mais novas primeiro
-        if not mostrar_sep:
-            st.caption("Pasta vazia.")
-        else:
+            if not revisar:
+                st.caption("Nada para revisar. 🎉")
+            mostrar_sep = list(reversed(revisar))
             por_pagina = 12
-            paginas = (len(mostrar_sep) - 1) // por_pagina + 1
-            pag = st.number_input(f"Página (de {paginas})", 1, paginas, 1, key=f"sep_pag_{pasta_ver}") if paginas > 1 else 1
+            paginas = max(1, (len(mostrar_sep) - 1) // por_pagina + 1)
+            pag = st.number_input(f"Página (de {paginas})", 1, paginas, 1, key="sep_pag_rev") if paginas > 1 else 1
             trecho = mostrar_sep[(pag - 1) * por_pagina: pag * por_pagina]
             for ini in range(0, len(trecho), 4):
                 for col, f in zip(st.columns(4), trecho[ini:ini + 4]):
                     with col, st.container(border=True):
-                        bruto = ler_bin(f["arquivo"])
-                        if bruto:
-                            st.image(bruto, use_container_width=True)
-                        else:
-                            st.caption("(imagem não encontrada)")
+                        src = imagem_do_banco(f["arquivo"])
+                        if src:
+                            st.markdown(f"<img src='{src}' style='width:100%;aspect-ratio:1/1;object-fit:cover;"
+                                        "border-radius:8px;'>", unsafe_allow_html=True)
                         st.markdown(f"**{html.escape(f.get('nome', ''))}**")
-                        info = f"{f.get('data', '')}"
-                        if f["pasta"] != PASTA_REVISAR and f["pasta"] not in cats_sep:
-                            info += f" · era de {f['pasta']}"
-                        elif f.get("sugestao") and f["pasta"] == PASTA_REVISAR:
+                        info = f.get("data", "")
+                        if f.get("sugestao"):
                             info += f" · palpite: {f['sugestao']} ({float(f.get('confianca') or 0):.0%})"
-                        elif f.get("confianca") not in (None, ""):
-                            info += f" · certeza {float(f.get('confianca') or 0):.0%}"
                         st.caption(info)
                         if f.get("motivo"):
                             st.caption(f"🤖 {f['motivo']}")
-                        atual_idx = destinos.index(f["pasta"]) if f["pasta"] in destinos else (
-                            destinos.index(f["sugestao"]) if f.get("sugestao") in destinos else 0)
-                        dest = st.selectbox("Pasta", destinos, index=atual_idx, key=f"sep_dest_{f['id']}",
+                        pre = destinos.index(f["sugestao"]) if f.get("sugestao") in destinos else len(destinos) - 1
+                        dest = st.selectbox("Mandar para", destinos, index=pre, key=f"sep_dest_{f['id']}",
                                             label_visibility="collapsed")
                         b1, b2 = st.columns(2)
                         if b1.button("Mover", key=f"sep_mov_{f['id']}", use_container_width=True,
-                                     disabled=dest == f["pasta"]):
-                            mover_fotos_sep({f["id"]}, dest)
-                            st.rerun()
+                                     disabled=dest == PASTA_REVISAR):
+                            _mover_e_avisar(f, dest)
                         if b2.button("🗑️", key=f"sep_del_{f['id']}", use_container_width=True, help="Excluir foto"):
-                            excluir_foto_sep(f["id"])
+                            excluir_foto_sep(f)
                             st.rerun()
-                        if f["pasta"] in cats_sep and bruto:
-                            with st.popover("🖼️ Usar no produto", use_container_width=True):
-                                mods = df_produtos[df_produtos["categoria"].astype(str).str.strip() == f["pasta"]]["modelo"].tolist()
-                                prod = st.selectbox("Produto", mods, key=f"sep_prod_{f['id']}")
-                                if st.button("Usar esta foto", key=f"sep_usar_{f['id']}", type="primary"):
-                                    novo_df = df_produtos.copy()
-                                    m = (novo_df["categoria"].astype(str).str.strip() == f["pasta"]) & (novo_df["modelo"] == prod)
-                                    novo_df.loc[m, "imagem"] = "data:image/jpeg;base64," + base64.b64encode(bruto).decode()
-                                    gravar_csv(ARQ_PRODUTOS, novo_df)
+        else:
+            # Todos os produtos da categoria, sem vagas e sem limite
+            por_arquivo = {PREFIXO_BIN + f["arquivo"]: f for f in fotos_sep}
+            grupo = df_cat[df_cat["categoria"].astype(str).str.strip() == pasta_ver]
+            na_loja = sum(1 for _, l in grupo.iterrows() if l["ativo"] and (tem_foto_propria(l) or not esconder))
+            st.caption(f"{len(grupo)} produto(s) nesta categoria · {na_loja} aparecendo na loja.")
+            linhas = list(grupo.iterrows())
+            por_pagina = 20
+            paginas = max(1, (len(linhas) - 1) // por_pagina + 1)
+            pag = st.number_input(f"Página (de {paginas})", 1, paginas, 1, key=f"sep_pag_{pasta_ver}") if paginas > 1 else 1
+            trecho = linhas[(pag - 1) * por_pagina: pag * por_pagina]
+            for ini in range(0, len(trecho), 5):
+                for col, (_, linha) in zip(st.columns(5), trecho[ini:ini + 5]):
+                    with col, st.container(border=True):
+                        st.markdown(f"<img src='{html.escape(url_segura(linha['imagem'], pasta_ver, linha['modelo']), quote=True)}' "
+                                    "style='width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:8px;'>",
+                                    unsafe_allow_html=True)
+                        avisos = []
+                        if not linha["ativo"]:
+                            avisos.append("escondido")
+                        elif esconder and not tem_foto_propria(linha):
+                            avisos.append("sem foto: não aparece na loja")
+                        st.caption(f"**{linha['modelo']}**" + (" · " + ", ".join(avisos) if avisos else ""))
+                        f = por_arquivo.get(str(linha["imagem"]))
+                        if not f:
+                            st.caption("Cadastrado à mão (mude em 📦 Produtos ou 🖼️ Fotos).")
+                            continue
+                        dest = st.selectbox("Mandar para", destinos, index=destinos.index(pasta_ver),
+                                            key=f"sep_dest_{f['id']}", label_visibility="collapsed")
+                        b1, b2 = st.columns(2)
+                        if b1.button("Mover", key=f"sep_mov_{f['id']}", use_container_width=True,
+                                     disabled=dest == pasta_ver):
+                            _mover_e_avisar(f, dest)
+                        if b2.button("🗑️", key=f"sep_del_{f['id']}", use_container_width=True,
+                                     help="Excluir esta foto (o produto criado por ela some da loja)"):
+                            excluir_foto_sep(f)
+                            st.rerun()
+
+    # ---------------------------------------------------------- APARÊNCIA DA LOJA
+    elif secao == "🖌️ Aparência da loja":
+        st.caption("Mude o visual da loja. A prévia embaixo mostra como fica antes de salvar.")
+        if st.session_state.get("ap_salvo"):
+            st.success(st.session_state.pop("ap_salvo"))
+        a1, a2 = st.columns(2)
+        with a1.container(border=True):
+            st.markdown("**🖼️ Plano de fundo**")
+            ap_fundo = st.selectbox("Tipo de fundo", FUNDOS_LOJA, key="ap_fundo",
+                                    index=FUNDOS_LOJA.index(LOJA["fundo"]) if LOJA["fundo"] in FUNDOS_LOJA else 0)
+            ap_fcor = st.color_picker("Cor do fundo", cor_ok(LOJA.get("fundo_cor"), "#f4f6fb"), key="ap_fcor")
+            ap_ffoto = None
+            if ap_fundo == "Minha foto":
+                if LOJA.get("fundo_foto"):
+                    st.caption("✅ Você já tem uma foto de fundo. Envie outra só se quiser trocar.")
+                ap_ffoto = st.file_uploader("Foto de fundo (até 8 MB)", type=["png", "jpg", "jpeg", "webp"], key="ap_ffoto")
+            ap_op = st.slider("Quadradinhos dos produtos: quanto ficam brancos por cima do fundo", 30, 100,
+                              int(LOJA.get("cartao_opacidade", 88)), 2, format="%d%%", key="ap_op")
+        with a2.container(border=True):
+            st.markdown("**🎨 Cores, letras e logo**")
+            c1, c2 = st.columns(2)
+            ap_cor = c1.color_picker("Cor dos botões", COR, key="ap_cor")
+            ap_ctit = c2.color_picker("Cor dos títulos", COR_TIT, key="ap_ctit")
+            fontes = list(FONTES_LOJA)
+            ap_fonte = st.selectbox("Fonte das letras", fontes, key="ap_fonte",
+                                    index=fontes.index(LOJA.get("fonte_loja")) if LOJA.get("fonte_loja") in fontes else 0)
+            if LOJA.get("logo"):
+                st.markdown(f"<img src='{imagem_do_banco(LOJA['logo'])}' style='max-height:60px;'>",
+                            unsafe_allow_html=True)
+            ap_logo = st.file_uploader("Sua logo (PNG com fundo transparente fica melhor)",
+                                       type=["png", "jpg", "jpeg", "webp"], key="ap_logo")
+            ap_tira_logo = st.checkbox("Tirar a logo", key="ap_tira_logo") if LOJA.get("logo") else False
+            ap_logo_alt = st.slider("Tamanho da logo", 30, 160, int(LOJA.get("logo_altura", 70)), 5, key="ap_logo_alt")
+        with st.container(border=True):
+            st.markdown("**🔲 Bordas dos quadradinhos**")
+            b1, b2, b3, b4 = st.columns(4)
+            ap_bcor = b1.color_picker("Cor da borda", cor_ok(LOJA.get("borda_cor"), "#d9dfeb"), key="ap_bcor")
+            ap_bgr = b2.slider("Grossura", 0, 8, int(LOJA.get("borda_grossura", 1)), key="ap_bgr")
+            ap_bcan = b3.slider("Cantos arredondados", 0, 40, int(LOJA.get("borda_cantos", 14)), key="ap_bcan")
+            sombras = list(SOMBRAS_LOJA)
+            ap_bsom = b4.selectbox("Sombra", sombras, key="ap_bsom",
+                                   index=sombras.index(LOJA.get("borda_sombra")) if LOJA.get("borda_sombra") in sombras else 1)
+
+        # ----- Prévia (mostra as escolhas antes de salvar)
+        imp, fam = css_fonte_loja(ap_fonte)
+        if ap_fundo == "Minha foto" and (ap_ffoto is not None or LOJA.get("fundo_foto")):
+            src_f = (f"data:image/jpeg;base64,{base64.b64encode(preparar_foto(ap_ffoto.getvalue(), 900, 70)).decode()}"
+                     if ap_ffoto is not None else imagem_do_banco(LOJA["fundo_foto"]))
+            fundo_prev = f"background:{ap_fcor} url('{src_f}') center/cover;"
+        elif ap_fundo in FUNDOS:
+            fundo_prev = css_fundo(ap_fundo).replace(" !important", "")
+        else:
+            fundo_prev = f"background:{ap_fcor};"
+        logo_prev = ""
+        if ap_logo is not None:
+            logo_prev = f"<img src='data:image/png;base64,{base64.b64encode(ap_logo.getvalue()).decode()}' style='max-height:{ap_logo_alt}px;max-width:200px;'>"
+        elif LOJA.get("logo") and not ap_tira_logo:
+            logo_prev = f"<img src='{imagem_do_banco(LOJA['logo'])}' style='max-height:{ap_logo_alt}px;max-width:200px;'>"
+        cartao = (f"background:rgba(255,255,255,{ap_op / 100:.2f});border:{ap_bgr}px solid {ap_bcor};"
+                  f"border-radius:{ap_bcan}px;box-shadow:{SOMBRAS_LOJA[ap_bsom]};padding:10px;width:150px;")
+        cartoes = "".join(
+            f"<div style='{cartao}'><div style='height:80px;border-radius:{max(ap_bcan - 4, 0)}px;background:#e3eafc;"
+            f"display:flex;align-items:center;justify-content:center;font-size:2rem;'>{ic}</div>"
+            f"<div style='font-weight:700;margin:6px 0 2px;color:#1a2233;'>{nm}</div>"
+            f"<div style='color:#1a2233;'>R$ 49,90</div><div style='margin-top:6px;background:{ap_cor};color:#fff;"
+            f"border-radius:8px;text-align:center;padding:5px;font-weight:600;'>Ver detalhes</div></div>"
+            for ic, nm in [("☕", "Caneca"), ("👕", "Camiseta"), ("🧢", "Boné")])
+        components.html(
+            f"<style>{imp} body{{margin:0;font-family:{fam};}}</style>"
+            f"<div style='{fundo_prev}padding:18px;border-radius:14px;min-height:300px;'>"
+            f"<div style='background:linear-gradient(120deg,{ap_cor},#0ea5e9);border-radius:16px;padding:14px 20px;"
+            f"color:#fff;font-size:1.5rem;font-weight:800;display:flex;align-items:center;gap:12px;'>"
+            f"{logo_prev or '🏷️'} {html.escape(LOJA['nome_empresa'])}</div>"
+            f"<h3 style='color:{ap_ctit};margin:14px 0 10px;'>📦 Categorias</h3>"
+            f"<div style='display:flex;gap:14px;flex-wrap:wrap;'>{cartoes}</div></div>", height=360)
+
+        if st.button("💾 Salvar aparência", type="primary", key="ap_salvar"):
+            if ap_ffoto is not None and ap_ffoto.size > 8 * 1024 * 1024:
+                st.error("A foto de fundo passa de 8 MB.")
+            elif ap_fundo == "Minha foto" and ap_ffoto is None and not LOJA.get("fundo_foto"):
+                st.error("Envie a foto de fundo.")
+            else:
+                if ap_ffoto is not None:
+                    trocar_imagem_loja("fundo_foto", ap_ffoto, 1600)
+                if ap_logo is not None:
+                    trocar_imagem_loja("logo", ap_logo, 500, transparente=True)
+                elif ap_tira_logo:
+                    trocar_imagem_loja("logo", None, 0)
+                LOJA.update({"fundo": ap_fundo, "fundo_cor": ap_fcor, "cartao_opacidade": int(ap_op),
+                             "cor_principal": ap_cor, "cor_titulos": ap_ctit, "fonte_loja": ap_fonte,
+                             "logo_altura": int(ap_logo_alt), "borda_cor": ap_bcor, "borda_grossura": int(ap_bgr),
+                             "borda_cantos": int(ap_bcan), "borda_sombra": ap_bsom})
+                gravar_loja(LOJA)
+                for k in ("ap_ffoto", "ap_logo", "ap_tira_logo"):
+                    st.session_state.pop(k, None)
+                st.session_state.ap_salvo = "✅ Aparência salva! Clique em 🚪 Voltar para a loja para ver."
+                st.rerun()
+
+    # ---------------------------------------------------------- PROMOÇÕES E SELOS
+    elif secao == "📣 Promoções e selos":
+        if st.session_state.get("promo_salvo"):
+            st.success(st.session_state.pop("promo_salvo"))
+        titulo_secao("📣 Banner no topo da loja")
+        st.caption("Cada linha é uma faixa colorida no topo da loja. Ela aparece só entre as datas de início e fim "
+                   "(deixe em branco para aparecer sempre). Desmarque “Ligado” para esconder sem apagar.")
+        ano = datetime.now().year
+        hoje_dt = datetime.now()
+        proximas = []
+        for a in (ano, ano + 1):
+            proximas += [d for d in datas_especiais(a) if d[1] >= hoje_dt - timedelta(days=1)]
+        proximas = proximas[:6]
+        st.markdown("**Datas especiais (um clique cria o banner, 15 dias antes até o dia):**")
+        cols_d = st.columns(len(proximas) or 1)
+        for col, (nome_d, dia, texto_d) in zip(cols_d, proximas):
+            if col.button(f"{nome_d}\n{dia.strftime('%d/%m')}", key=f"data_{nome_d}_{dia.year}", use_container_width=True):
+                LOJA.setdefault("banners", []).append({
+                    "texto": texto_d, "cor": "#dc2626", "ativo": True,
+                    "inicio": (dia - timedelta(days=15)).strftime("%Y-%m-%d"), "fim": dia.strftime("%Y-%m-%d")})
+                gravar_loja(LOJA)
+                st.session_state.promo_salvo = f"✅ Banner de {nome_d} criado. Ajuste o texto na tabela se quiser."
+                st.rerun()
+        tab_ban = pd.DataFrame(LOJA.get("banners") or [], columns=["texto", "cor", "inicio", "fim", "ativo"])
+        for c in ("inicio", "fim"):
+            tab_ban[c] = pd.to_datetime(tab_ban[c].replace("", None), errors="coerce").dt.date
+        tab_ban["ativo"] = tab_ban["ativo"].fillna(True).astype(bool)
+        tab_ban["cor"] = tab_ban["cor"].fillna("#dc2626")
+        ban_ed = st.data_editor(tab_ban, num_rows="dynamic", use_container_width=True, key="ed_banners",
+            column_config={
+                "texto": st.column_config.TextColumn("Texto do banner", width="large", max_chars=140),
+                "cor": st.column_config.TextColumn("Cor (#rrggbb)", help="ex.: #dc2626 vermelho, #16a34a verde, "
+                                                   "#7c3aed roxo, #ea580c laranja", default="#dc2626"),
+                "inicio": st.column_config.DateColumn("Começa em", format="DD/MM/YYYY"),
+                "fim": st.column_config.DateColumn("Termina em", format="DD/MM/YYYY"),
+                "ativo": st.column_config.CheckboxColumn("Ligado", default=True)})
+        if st.button("💾 Salvar banners", type="primary", key="salvar_banners"):
+            novos = []
+            for _, r in ban_ed.iterrows():
+                if str(r.get("texto") or "").strip():
+                    novos.append({"texto": str(r["texto"]).strip(), "cor": cor_ok(r.get("cor"), "#dc2626"),
+                                  "inicio": r["inicio"].strftime("%Y-%m-%d") if pd.notna(r["inicio"]) else "",
+                                  "fim": r["fim"].strftime("%Y-%m-%d") if pd.notna(r["fim"]) else "",
+                                  "ativo": bool(r["ativo"]) if pd.notna(r["ativo"]) else True})
+            LOJA["banners"] = novos
+            gravar_loja(LOJA)
+            st.session_state.promo_salvo = "✅ Banners salvos."
+            st.rerun()
+        if banners_ativos():
+            st.markdown("**Aparecendo hoje na loja:**")
+            st.markdown(html_banners(), unsafe_allow_html=True)
+
+        titulo_secao("🏷️ Selinhos nos produtos")
+        st.markdown("<span class='selo selo-novo'>Novidade</span> <span class='selo selo-top'>Mais vendido</span> "
+                    "<span class='selo selo-promo'>Promoção</span>", unsafe_allow_html=True)
+        st.caption("O selo **Promoção** aparece sozinho quando o produto tem preço promocional valendo (em 📦 Produtos). "
+                   "Marque abaixo os de **Novidade** e **Mais vendido**.")
+        s1, s2 = st.columns(2)
+        mv_auto = s1.checkbox("Marcar “Mais vendido” sozinho, pelos pedidos", value=bool(LOJA.get("selo_mais_vendido_auto", True)),
+                              key="mv_auto")
+        mv_qtd = s2.number_input("Quantos produtos ganham o selo automático", 1, 50,
+                                 int(LOJA.get("selo_mais_vendido_qtd", 5)), key="mv_qtd")
+        if mv_auto != bool(LOJA.get("selo_mais_vendido_auto", True)) or int(mv_qtd) != int(LOJA.get("selo_mais_vendido_qtd", 5)):
+            LOJA["selo_mais_vendido_auto"], LOJA["selo_mais_vendido_qtd"] = bool(mv_auto), int(mv_qtd)
+            gravar_loja(LOJA)
+            st.rerun()
+        if mv_auto and nomes_mais_vendidos():
+            st.caption("Mais vendidos agora: " + ", ".join(sorted(nomes_mais_vendidos())))
+        f_cat = st.selectbox("Categoria", ["Todas"] + sorted(df_produtos["categoria"].unique().tolist()), key="selo_cat")
+        vis = df_produtos if f_cat == "Todas" else df_produtos[df_produtos["categoria"] == f_cat]
+        selo_ed = st.data_editor(vis[["categoria", "modelo", "novidade", "mais_vendido"]], use_container_width=True,
+            hide_index=True, disabled=["categoria", "modelo"], key=f"ed_selos_{f_cat}",
+            column_config={"categoria": "Categoria", "modelo": "Produto",
+                           "novidade": st.column_config.CheckboxColumn("🆕 Novidade"),
+                           "mais_vendido": st.column_config.CheckboxColumn("🔥 Mais vendido (fixo)")})
+        if st.button("💾 Salvar selos", type="primary", key="salvar_selos"):
+            novo_df = df_produtos.copy()
+            novo_df.loc[selo_ed.index, "novidade"] = selo_ed["novidade"].astype(bool)
+            novo_df.loc[selo_ed.index, "mais_vendido"] = selo_ed["mais_vendido"].astype(bool)
+            gravar_csv(ARQ_PRODUTOS, novo_df)
+            st.session_state.promo_salvo = "✅ Selos salvos."
+            st.rerun()
+
+    # ---------------------------------------------------------- AVALIAÇÕES DE CLIENTES
+    elif secao == "⭐ Avaliações":
+        lig = st.toggle("Mostrar avaliações na loja (e deixar os clientes enviarem)",
+                        value=bool(LOJA.get("avaliacoes_ligadas", True)), key="aval_lig")
+        if lig != bool(LOJA.get("avaliacoes_ligadas", True)):
+            LOJA["avaliacoes_ligadas"] = bool(lig)
+            gravar_loja(LOJA)
+            st.rerun()
+        todas = ler_avaliacoes()
+
+        def _mudar_aval(aid: str, status: str = None, apagar: bool = False):
+            with trava():
+                lista = ler_avaliacoes()
+                alvo = next((a for a in lista if a["id"] == aid), None)
+                if alvo and apagar:
+                    lista = [a for a in lista if a["id"] != aid]
+                elif alvo:
+                    alvo["status"] = status
+                gravar_json(ARQ_AVALIACOES, lista)
+            if alvo and apagar and alvo.get("foto"):
+                apagar_bin(alvo["foto"])
+
+        pend = [a for a in todas if a.get("status") == "pendente"]
+        aprov = [a for a in todas if a.get("status") == "aprovada"]
+        recus = [a for a in todas if a.get("status") == "recusada"]
+        k1, k2, k3 = st.columns(3)
+        k1.metric("Esperando você", len(pend))
+        k2.metric("Aparecendo na loja", len(aprov))
+        k3.metric("Nota média", f"{sum(int(a.get('nota', 5)) for a in aprov) / len(aprov):.1f} ⭐" if aprov else "-")
+        aba_p, aba_a, aba_r = st.tabs([f"⏳ Para aprovar ({len(pend)})", f"✅ Aprovadas ({len(aprov)})",
+                                       f"🚫 Recusadas ({len(recus)})"])
+        for aba, lista_av, acoes in [(aba_p, pend, ("aprovada", "recusada")), (aba_a, aprov, ("recusada",)),
+                                     (aba_r, recus, ("aprovada",))]:
+            with aba:
+                if not lista_av:
+                    st.caption("Nada aqui.")
+                for ini in range(0, len(lista_av), 3):
+                    for col, a in zip(st.columns(3), list(reversed(lista_av))[ini:ini + 3]):
+                        with col, st.container(border=True):
+                            st.markdown(html_avaliacao(a), unsafe_allow_html=True)
+                            st.caption(a.get("data", ""))
+                            bts = st.columns(len(acoes) + 1)
+                            for b, acao in zip(bts, acoes):
+                                rot = "✅ Aprovar" if acao == "aprovada" else ("🚫 Recusar" if a["status"] == "pendente" else "🙈 Esconder")
+                                if b.button(rot, key=f"av_{acao}_{a['id']}", use_container_width=True):
+                                    _mudar_aval(a["id"], acao)
                                     st.rerun()
+                            if bts[-1].button("🗑️", key=f"av_del_{a['id']}", use_container_width=True, help="Apagar"):
+                                _mudar_aval(a["id"], apagar=True)
+                                st.rerun()
+
+    # ---------------------------------------------------------- CONFIANÇA E RODAPÉ
+    elif secao == "🤝 Confiança e rodapé":
+        if st.session_state.get("conf_salvo"):
+            st.success(st.session_state.pop("conf_salvo"))
+        with st.form("form_confianca"):
+            t1, t2, t3, t4, t5 = st.tabs(["Rodapé", "Quem somos", "Prazos e trocas", "Selos e contador", "WhatsApp flutuante"])
+            with t1:
+                r_lig = st.checkbox("Mostrar o rodapé na loja", value=bool(LOJA.get("rodape_ligado", True)))
+                c1, c2 = st.columns(2)
+                r_cnpj = c1.text_input("CNPJ", value=LOJA.get("rodape_cnpj") or LOJA.get("fiscal_cnpj", ""))
+                r_cid = c2.text_input("Cidade / UF", value=LOJA.get("rodape_cidade") or LOJA.get("fiscal_cidade_uf", ""))
+                r_email = c1.text_input("E-mail", value=LOJA.get("rodape_email", ""))
+                r_hor = c2.text_input("Horário (vazio = usa o horário do chat)", value=LOJA.get("rodape_horario", ""),
+                                      placeholder=texto_horario())
+                st.caption("O nome da empresa e o WhatsApp vêm de 🎨 Loja e redes.")
+            with t2:
+                q_tit = st.text_input("Título da página", value=LOJA.get("quem_somos_titulo", "Quem somos"))
+                q_txt = st.text_area("A história da loja", value=LOJA.get("quem_somos_texto", ""), height=220)
+                if LOJA.get("quem_somos_foto"):
+                    st.markdown(f"<img src='{imagem_do_banco(LOJA['quem_somos_foto'])}' style='max-height:120px;"
+                                "border-radius:10px;'>", unsafe_allow_html=True)
+                q_foto = st.file_uploader("Foto (sua, da equipe ou do ateliê, até 8 MB)", type=["png", "jpg", "jpeg", "webp"])
+                q_tira = st.checkbox("Tirar a foto") if LOJA.get("quem_somos_foto") else False
+            with t3:
+                g_prod = st.text_area("⏰ Prazo de produção", value=LOJA.get("regra_producao", ""))
+                g_ent = st.text_area("🚚 Entrega", value=LOJA.get("regra_entrega", ""))
+                g_tro = st.text_area("🔄 Trocas", value=LOJA.get("regra_trocas", ""))
+                g_def = st.text_area("🛠️ Defeitos", value=LOJA.get("regra_defeitos", ""))
+                st.caption("Deixe um campo vazio para ele não aparecer.")
+            with t4:
+                s_lig = st.checkbox("Mostrar os selos de confiança", value=bool(LOJA.get("selos_confianca", True)))
+                c1, c2 = st.columns(2)
+                s_1 = c1.text_input("Selo 1", value=LOJA.get("selo_1", "🔒 Pagamento seguro"))
+                s_2 = c2.text_input("Selo 2", value=LOJA.get("selo_2", "✅ Compra garantida"))
+                n_lig = st.checkbox("Mostrar o contador de pedidos entregues", value=bool(LOJA.get("contador_entregues", True)))
+                n_extra = st.number_input("Somar pedidos entregues antes da loja online", min_value=0,
+                                          value=int(LOJA.get("contador_extra", 0) or 0), step=1)
+                st.caption(f"Hoje o contador mostraria: {pedidos_entregues() - int(LOJA.get('contador_extra', 0) or 0) + int(n_extra)} "
+                           "(pedidos com status Entregue + o número acima). Com 0, ele não aparece.")
+            with t5:
+                w_lig = st.checkbox("Mostrar o botão flutuante do WhatsApp", value=bool(LOJA.get("wpp_flutuante", True)))
+                w_msg = st.text_input("Mensagem que já vem escrita", value=LOJA.get("wpp_flutuante_msg", ""))
+                st.caption("O número é o de 🎨 Loja e redes.")
+            if st.form_submit_button("💾 Salvar", type="primary"):
+                if q_foto is not None and q_foto.size > 8 * 1024 * 1024:
+                    st.error("A foto passa de 8 MB.")
+                else:
+                    if q_foto is not None:
+                        trocar_imagem_loja("quem_somos_foto", q_foto, 1200)
+                    elif q_tira:
+                        trocar_imagem_loja("quem_somos_foto", None, 0)
+                    LOJA.update({"rodape_ligado": r_lig, "rodape_cnpj": r_cnpj.strip(), "rodape_cidade": r_cid.strip(),
+                                 "rodape_email": r_email.strip(), "rodape_horario": r_hor.strip(),
+                                 "quem_somos_titulo": q_tit.strip() or "Quem somos", "quem_somos_texto": q_txt,
+                                 "regra_producao": g_prod, "regra_entrega": g_ent, "regra_trocas": g_tro,
+                                 "regra_defeitos": g_def, "selos_confianca": s_lig, "selo_1": s_1, "selo_2": s_2,
+                                 "contador_entregues": n_lig, "contador_extra": int(n_extra),
+                                 "wpp_flutuante": w_lig, "wpp_flutuante_msg": w_msg})
+                    gravar_loja(LOJA)
+                    st.session_state.conf_salvo = "✅ Salvo! Veja na loja."
+                    st.rerun()
+        st.markdown("**Prévia do rodapé**")
+        st.markdown(html_rodape(), unsafe_allow_html=True)
     # ---------------------------------------------------------- CLIENTES
     elif secao == "👥 Clientes":
         clientes = ler_csv(ARQ_CLIENTES, COLUNAS_CLIENTES)
@@ -4625,9 +5556,7 @@ Na aba *Notas dos pedidos* existe um botão que gera a declaração pronta para 
                 l_sub = c2.text_input("Subtítulo", value=LOJA["subtitulo"])
                 l_frase = c1.text_input("Frase do banner", value=LOJA["frase_banner"])
                 l_wpp = c2.text_input("WhatsApp que recebe os pedidos (55 + DDD + número)", value=LOJA["whatsapp"])
-                l_cor = c1.color_picker("Cor principal", value=LOJA["cor_principal"])
-                l_fundo = c2.selectbox("Fundo da página", FUNDOS,
-                                       index=FUNDOS.index(LOJA["fundo"]) if LOJA["fundo"] in FUNDOS else 0)
+                c1.caption("🖌️ Cores, fundo, fonte e logo ficam em LOJA ONLINE → Aparência da loja.")
             with t2:
                 c1, c2 = st.columns([2, 1])
                 l_insta = c1.text_input("Link do Instagram", value=LOJA["instagram"],
@@ -4678,7 +5607,7 @@ Na aba *Notas dos pedidos* existe um botão que gera a declaração pronta para 
             if st.form_submit_button("💾 Salvar configurações da loja", type="primary"):
                 LOJA.update({
                     "nome_empresa": l_nome, "subtitulo": l_sub, "frase_banner": l_frase,
-                    "whatsapp": "".join(ch for ch in l_wpp if ch.isdigit()), "cor_principal": l_cor, "fundo": l_fundo,
+                    "whatsapp": "".join(ch for ch in l_wpp if ch.isdigit()),
                     "instagram": l_insta.strip(), "facebook": l_face.strip(), "mostrar_redes": l_redes,
                     "twitter": l_tw.strip(),
                     "link_loja": l_link.strip(), "pix_chave": l_pix.strip(), "pix_nome": l_pixn.strip(),
@@ -5052,7 +5981,11 @@ def ir_para(pagina: str, categoria: str = None):
 # ===============================================================
 # TOPO DA LOJA (banner, redes, menu)
 # ===============================================================
-st.markdown(f"<div class='banner'><h1>🏷️ {html.escape(LOJA['nome_empresa'])}</h1>"
+if html_banners():
+    st.markdown(html_banners(), unsafe_allow_html=True)
+_logo = imagem_do_banco(LOJA.get("logo", "")) if LOJA.get("logo") else ""
+_marca = f"<img class='logo' src='{_logo}' alt=''>" if _logo else "🏷️"
+st.markdown(f"<div class='banner'><h1>{_marca} {html.escape(LOJA['nome_empresa'])}</h1>"
             f"<p>{html.escape(LOJA['subtitulo'])}</p><p><b>{html.escape(LOJA['frase_banner'])}</b></p></div>",
             unsafe_allow_html=True)
 m1, m2, m3, m4, m5 = st.columns([1, 1, 1, 1, 1])
@@ -5076,7 +6009,17 @@ with m5.popover("📱 QR da loja", use_container_width=True):
         st.caption("Aponte a câmera do celular para abrir a loja.")
     else:
         st.caption("Em breve.")
+i1, i2, i3, i4 = st.columns(4)
+if i1.button("📦 Acompanhar pedido", use_container_width=True, key="nav_acomp"):
+    abrir_acompanhamento()
+i2.button(f"💜 {LOJA.get('quem_somos_titulo') or 'Quem somos'}", use_container_width=True, on_click=ir_para,
+          args=("quem_somos",), key="nav_quem")
+i3.button("📜 Prazos e trocas", use_container_width=True, on_click=ir_para, args=("regras",), key="nav_regras")
+if LOJA.get("avaliacoes_ligadas", True):
+    i4.button("⭐ Avaliações", use_container_width=True, on_click=ir_para, args=("avaliacoes",), key="nav_aval")
 barra_redes(LOJA)
+if html_faixa_confianca():
+    st.markdown(html_faixa_confianca(), unsafe_allow_html=True)
 
 if modo_empresa():
     emp = st.session_state.empresa
@@ -5098,6 +6041,42 @@ pagina = st.session_state.pagina
 if pagina == "vitrine":
     titulo_secao("🎬 Vitrine de vídeos")
     render_vitrine(VITRINE)
+
+elif pagina == "quem_somos":
+    st.button("⬅️ Voltar", on_click=ir_para, args=("inicio",), key="voltar_quem")
+    titulo_secao(f"💜 {LOJA.get('quem_somos_titulo') or 'Quem somos'}")
+    with st.container(border=True):
+        _foto_qs = imagem_do_banco(LOJA.get("quem_somos_foto", "")) if LOJA.get("quem_somos_foto") else ""
+        if _foto_qs:
+            q1, q2 = st.columns([1, 1.4])
+            q1.markdown(f"<img src='{_foto_qs}' style='width:100%;border-radius:14px;'>", unsafe_allow_html=True)
+            alvo = q2
+        else:
+            alvo = st
+        alvo.markdown(html.escape(LOJA.get("quem_somos_texto", "")).replace("\n", "<br>"), unsafe_allow_html=True)
+        if link_wpp():
+            alvo.link_button("💬 Fale com a gente no WhatsApp", link_wpp("Olá! Conheci a loja e quero saber mais."))
+
+elif pagina == "regras":
+    st.button("⬅️ Voltar", on_click=ir_para, args=("inicio",), key="voltar_regras")
+    titulo_secao("📜 Prazos, entrega, trocas e defeitos")
+    for _icone, _titulo, _chave in [("⏰", "Prazo de produção", "regra_producao"), ("🚚", "Entrega", "regra_entrega"),
+                                    ("🔄", "Trocas", "regra_trocas"), ("🛠️", "Defeitos", "regra_defeitos")]:
+        if str(LOJA.get(_chave, "")).strip():
+            with st.container(border=True):
+                st.markdown(f"#### {_icone} {_titulo}")
+                st.markdown(html.escape(LOJA[_chave]).replace("\n", "<br>"), unsafe_allow_html=True)
+
+elif pagina == "avaliacoes" and LOJA.get("avaliacoes_ligadas", True):
+    st.button("⬅️ Voltar", on_click=ir_para, args=("inicio",), key="voltar_aval")
+    titulo_secao("⭐ O que nossos clientes dizem")
+    _aprov = avaliacoes_aprovadas()
+    if st.button("✍️ Deixar minha avaliação", type="primary", key="aval_abrir_pag"):
+        abrir_avaliacao()
+    if _aprov:
+        mostrar_avaliacoes(_aprov)
+    else:
+        st.info("Ainda não há avaliações. Seja o primeiro a avaliar!")
 
 elif pagina == "categoria" and st.session_state.categoria_aberta in CATALOGO:
     cat_nome = st.session_state.categoria_aberta
@@ -5121,7 +6100,8 @@ elif pagina == "categoria" and st.session_state.categoria_aberta in CATALOGO:
                                             html_imagem(item["imagem"], cat_nome, item["nome"], classe="cat-img",
                                                         zoom=False, dica="🔍"),
                                             dica="Ver detalhes")
-                selo = "<span class='selo selo-promo'>PROMOÇÃO</span> " if item["em_promo"] else ""
+                selo = html_selos(item)
+                selo = f"{selo}<br>" if selo else ""
                 st.markdown(f"{selo}**{item['nome']}**  \nR$ {item['preco']:.2f}", unsafe_allow_html=True)
                 clicou_botao = st.button("🔍 Ver detalhes", key=f"ver_{item['id']}", use_container_width=True,
                                          type="primary")
@@ -5151,3 +6131,24 @@ else:
                     registrar_clique("abriu_categoria", cat_nome)
                     ir_para("categoria", cat_nome)
                     st.rerun()
+    if LOJA.get("avaliacoes_ligadas", True):
+        st.markdown("### ⭐ O que nossos clientes dizem")
+        _aprov = avaliacoes_aprovadas()
+        if _aprov:
+            mostrar_avaliacoes(_aprov[:3])
+        else:
+            st.caption("Ainda não há avaliações. Seja o primeiro!")
+        a1, a2 = st.columns(2)
+        if a1.button("✍️ Deixar minha avaliação", use_container_width=True, key="aval_abrir_ini"):
+            abrir_avaliacao()
+        if len(_aprov) > 3:
+            a2.button(f"Ver todas as {len(_aprov)} avaliações", use_container_width=True, on_click=ir_para,
+                      args=("avaliacoes",), key="aval_todas")
+
+# ===============================================================
+# RODAPÉ E BOTÃO DO WHATSAPP (em todas as páginas da loja)
+# ===============================================================
+if LOJA.get("rodape_ligado", True):
+    st.markdown(html_rodape(), unsafe_allow_html=True)
+if html_wpp_flutuante():
+    st.markdown(html_wpp_flutuante(), unsafe_allow_html=True)
